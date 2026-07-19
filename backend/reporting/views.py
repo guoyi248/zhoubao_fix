@@ -221,6 +221,115 @@ def resubmit_report(request, report_id):
     return Response({"detail": "周报已重新打开，可以上传新文件", "status": "resubmitted"})
 
 
+@api_view(["POST"])
+@transaction.atomic
+def correct_report(request, report_id):
+    """
+    POST /api/v1/me/reports/{id}/correct
+    一步更正：上传新文件 → 删旧附件 → 转PDF → 创建新Revision → 提交。
+    无需多步操作。
+    """
+    import os, uuid
+    from django.utils import timezone as tz
+    from attachments.models import Attachment, AttachmentStatus, AttachmentPreview
+    from attachments.mime_utils import detect_mime, get_level, is_pdf, is_office_file
+    from attachments.converter import convert_and_store
+    from common.storage import storage
+
+    report = get_object_or_404(WeeklyReport, id=report_id, owner=request.user)
+    if report.status not in {ReportStatus.SUBMITTED, ReportStatus.RESUBMITTED}:
+        return Response({"code": "NOT_SUBMITTED", "message": "只能更正已提交的周报"}, status=409)
+
+    uploaded_file = request.FILES.get("file")
+    if not uploaded_file:
+        return Response({"code": "NO_FILE", "message": "请选择文件"}, status=400)
+
+    # 删除旧附件
+    Attachment.objects.filter(report=report).delete()
+
+    # 统一命名
+    _, ext = os.path.splitext(uploaded_file.name)
+    display_name = request.user.display_name
+    sunday = report.reporting_period.end_date.strftime('%Y%m%d')
+    safe_name = f"hubu_{display_name}_{sunday}{ext}"
+
+    # 上传新文件到 MinIO
+    attach_uuid = uuid.uuid4()
+    result = storage.upload_stream(
+        bucket=settings.S3_BUCKET_ORIGINALS,
+        object_key=f"originals/{attach_uuid}/source",
+        file_obj=uploaded_file,
+    )
+
+    # MIME 检测
+    uploaded_file.seek(0)
+    mime_type = detect_mime(uploaded_file.read(4096), safe_name)
+    level = get_level(mime_type)
+
+    # 创附件
+    attachment = Attachment.objects.create(
+        report=report, uploaded_by=request.user,
+        original_filename=safe_name, safe_filename=f"{attach_uuid}{ext}",
+        detected_mime=mime_type, source_sha256=result["sha256"],
+        file_size_bytes=result["size"],
+        original_object_key=f"originals/{attach_uuid}/source",
+        status=AttachmentStatus.CONVERTING,
+    )
+
+    # 转 PDF
+    if is_pdf(mime_type):
+        attachment.status = AttachmentStatus.PREVIEW_READY
+        attachment.save(update_fields=["status"])
+    elif is_office_file(mime_type):
+        try:
+            conv_result = convert_and_store(attachment)
+            if conv_result:
+                AttachmentPreview.objects.create(
+                    attachment=attachment, preview_object_key=conv_result["object_key"],
+                    source_sha256=attachment.source_sha256, converter_name="Gotenberg",
+                    converter_version="8", converter_image_digest="",
+                    output_sha256=conv_result["sha256"], page_count=conv_result["page_count"],
+                    status="ready",
+                )
+                attachment.status = AttachmentStatus.PREVIEW_READY
+            else:
+                attachment.status = AttachmentStatus.STORED
+        except Exception:
+            attachment.status = AttachmentStatus.STORED
+        attachment.save(update_fields=["status"])
+    else:
+        attachment.status = AttachmentStatus.STORED
+        attachment.save(update_fields=["status"])
+
+    # 确认附件
+    if attachment.status in {AttachmentStatus.PREVIEW_READY, AttachmentStatus.PREVIEW_WARNING}:
+        attachment.status = AttachmentStatus.USER_CONFIRMED
+        attachment.save(update_fields=["status"])
+
+    # 创建新 Revision
+    import json, hashlib
+    content_json = report.draft_content_json or {}
+    content_sha = hashlib.sha256(json.dumps(content_json, ensure_ascii=False, sort_keys=True).encode()).hexdigest()
+
+    from .models import WeeklyReportRevision
+    revision = WeeklyReportRevision.objects.create(
+        report=report, revision_no=report.revisions.count() + 1,
+        structured_content_json=content_json, submitted_by=request.user,
+        content_sha256=content_sha, confirmed_pdf_attachment=attachment,
+    )
+    report.status = ReportStatus.SUBMITTED
+    report.current_revision = revision
+    report.optimistic_version += 1
+    report.save(update_fields=["status", "current_revision", "optimistic_version"])
+
+    return Response({
+        "detail": "周报已更正",
+        "revision_no": revision.revision_no,
+        "attachment_id": str(attachment.id),
+        "status": attachment.status,
+    }, status=201)
+
+
 @api_view(["GET"])
 def list_my_revisions(request, report_id):
     """GET /api/v1/me/reports/{id}/revisions"""

@@ -152,27 +152,4 @@ class S3Storage:
         self.client.copy_object(Bucket=dst_bucket, Key=dst_key, CopySource={"Bucket": src_bucket, "Key": src_key})
 
 
-class AutoStorage:
-    """自动选择：S3 可用就用，否则本地存储。每次调用时检测。"""
-
-    def __init__(self):
-        self._s3 = S3Storage()
-        self._local = LocalStorage()
-        self._s3_ok = None
-
-    def _get(self):
-        if self._s3_ok is None:
-            try:
-                self._s3.client.head_bucket(settings.S3_BUCKET_ORIGINALS)
-                self._s3_ok = True
-                logger.info("Using S3/MinIO storage")
-            except Exception:
-                self._s3_ok = False
-                logger.warning("S3 unavailable, using local storage (media/)")
-        return self._s3 if self._s3_ok else self._local
-
-    def __getattr__(self, name):
-        return getattr(self._get(), name)
-
-
-storage = AutoStorage()
+storage = S3Storage()

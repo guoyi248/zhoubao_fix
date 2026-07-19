@@ -13,6 +13,7 @@ urlpatterns = [
     path("<uuid:report_id>/save", views.save_draft, name="save-draft"),
     path("<uuid:report_id>/submit", views.submit_report, name="submit"),
     path("<uuid:report_id>/resubmit", views.resubmit_report, name="resubmit"),
+    path("<uuid:report_id>/correct", views.correct_report, name="correct"),
     path("<uuid:report_id>/revisions", views.list_my_revisions, name="list-revisions"),
     path("<uuid:report_id>/revisions/<uuid:revision_id>", views.get_revision, name="get-revision"),
     path("<uuid:report_id>/attachments", attachment_views.upload_attachment, name="upload-attachment"),
