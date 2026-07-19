@@ -17,6 +17,7 @@ const uploading = ref(false);
 const loading = ref(true);
 const submitting = ref(false);
 const confirming = ref<string | null>(null);
+const previewAttId = ref("");
 let pollTimer: ReturnType<typeof setInterval> | null = null;
 
 const weekLabel = computed(() => report.value ? `第 ${report.value.period.iso_week} 周` : "");
@@ -52,7 +53,7 @@ async function loadAttachments(reportId: string) {
       const rev = data.revisions[0];
       if (rev.confirmed_pdf_attachment_id) {
         const a = attachments.value.find(x => x.id === rev.confirmed_pdf_attachment_id);
-        if (!a) attachments.value.push({ id: rev.confirmed_pdf_attachment_id, status: "user_confirmed" });
+        if (!a) attachments.value.push({ id: rev.confirmed_pdf_attachment_id, status: "user_confirmed" } as any);
       }
     }
   } catch {}
@@ -182,9 +183,9 @@ function canConfirm(s:string) { return ["preview_ready","preview_warning"].inclu
           <el-progress v-if="att.status==='converting'" :percentage="60" :indeterminate="true" :duration="2" style="width:80px" />
         </div>
         <div class="att-actions">
-          <a v-if="att.status!=='uploading'" :href="`/api/v1/attachments/${att.id}/preview-content`" target="_blank">
-            <el-button size="small" text>查看 PDF</el-button>
-          </a>
+          <el-button v-if="att.status!=='uploading'" size="small" text @click="previewAttId = (previewAttId===att.id ? '' : att.id)">
+            {{ previewAttId===att.id ? '收起 PDF' : '查看 PDF' }}
+          </el-button>
           <el-button v-if="canConfirm(att.status)" size="small" type="success" :loading="confirming===att.id" @click="confirmPreview(att)">确认无误</el-button>
           <a :href="`/api/v1/attachments/${att.id}/download`"><el-button size="small" text>下载原件</el-button></a>
           <el-button v-if="att.status!=='user_confirmed'" size="small" text type="danger" @click="removeAttachment(att)">删除</el-button>
@@ -194,6 +195,12 @@ function canConfirm(s:string) { return ["preview_ready","preview_warning"].inclu
           </label>
         </div>
       </div>
+    </el-card>
+
+    <!-- 内嵌 PDF 预览 -->
+    <el-card v-if="previewAttId" style="margin-top:12px">
+      <template #header>PDF 预览 <el-button text size="small" @click="previewAttId=''" style="float:right">关闭</el-button></template>
+      <iframe :src="`/api/v1/attachments/${previewAttId}/preview-content`" width="100%" height="700px" frameborder="0" />
     </el-card>
 
     <!-- 已提交预览 -->
