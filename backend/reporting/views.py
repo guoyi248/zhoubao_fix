@@ -150,25 +150,23 @@ def submit_report(request, report_id):
             status=status.HTTP_409_CONFLICT,
         )
 
-    # 校验附件状态
+    # 校验附件：只阻止还在处理中的文件，preview_ready/ready/user_confirmed 都允许
     from attachments.models import Attachment, AttachmentStatus
-    unconfirmed = Attachment.objects.filter(
+    still_processing = Attachment.objects.filter(
         report=report,
         status__in={
             AttachmentStatus.UPLOADING,
             AttachmentStatus.QUARANTINED,
             AttachmentStatus.SCANNING,
             AttachmentStatus.CONVERTING,
-            AttachmentStatus.PREVIEW_READY,
-            AttachmentStatus.PREVIEW_WARNING,
         },
     )
-    if unconfirmed.exists():
-        names = ", ".join(unconfirmed.values_list("original_filename", flat=True)[:5])
+    if still_processing.exists():
+        names = ", ".join(still_processing.values_list("original_filename", flat=True)[:5])
         return Response(
             {
-                "code": "ATTACHMENTS_NOT_READY",
-                "message": f"以下附件尚未就绪或待确认预览：{names}",
+                "code": "ATTACHMENTS_STILL_PROCESSING",
+                "message": f"以下附件仍在处理中：{names}",
             },
             status=status.HTTP_409_CONFLICT,
         )
@@ -202,8 +200,7 @@ def submit_report(request, report_id):
 @api_view(["POST"])
 @transaction.atomic
 def resubmit_report(request, report_id):
-    """POST /api/v1/me/reports/{id}/resubmit —— 重新提交。"""
-    # 复用提交逻辑，status 必须是 SUBMITTED 或 RESUBMITTED
+    """POST /api/v1/me/reports/{id}/resubmit —— 重新提交（修改已提交周报后再次提交）。"""
     report = get_object_or_404(WeeklyReport, id=report_id, owner=request.user)
     if report.status not in {ReportStatus.SUBMITTED, ReportStatus.RESUBMITTED}:
         return Response(
@@ -211,12 +208,10 @@ def resubmit_report(request, report_id):
             status=status.HTTP_409_CONFLICT,
         )
 
-    # 将状态退回为可编辑状态
+    # 状态设为 RESUBMITTED 表示可编辑
     report.status = ReportStatus.RESUBMITTED
     report.save(update_fields=["status"])
-
-    # 复用提交逻辑
-    return submit_report(request._request if hasattr(request, '_request') else request)
+    return submit_report(request)
 
 
 @api_view(["GET"])
