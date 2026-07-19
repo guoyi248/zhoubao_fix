@@ -44,6 +44,23 @@ npm run dev
 | 安全 | ClamAV + Django Session + CSRF + Argon2 + TOTP |
 | 部署 | Docker Compose + Nginx |
 
+## 一键部署到服务器
+
+```bash
+# 1. 把项目传到服务器
+git clone https://github.com/guoyi248/zhoubao_fix.git /srv/weekly-report
+cd /srv/weekly-report && git checkout dev
+
+# 2. 拷贝部署文件
+cp deploy/compose.yaml deploy/compose.production.yaml deploy/nginx.conf deploy/setup.sh /srv/weekly-report/
+
+# 3. 一键部署
+cd /srv/weekly-report && chmod +x setup.sh && ./setup.sh
+
+# 4. 访问 http://<服务器IP>
+# 管理员: admin / Admin123!
+```
+
 ## 项目结构
 
 ```
