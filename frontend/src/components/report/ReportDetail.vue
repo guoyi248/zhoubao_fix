@@ -91,11 +91,12 @@ function contentList(key: string): string[] {
       <div v-if="previewUrl" class="rd-preview">
         <h4>📄 周报 PDF 预览</h4>
         <iframe :src="previewUrl" width="100%" height="600px" frameborder="0" />
-        <p class="rd-hint">
-          <a :href="previewUrl" target="_blank">新窗口打开 PDF</a>
-        </p>
+        <p class="rd-hint"><a :href="previewUrl" target="_blank">新窗口打开 PDF</a></p>
       </div>
-      <el-empty v-else description="暂无 PDF 附件" :image-size="80" />
+      <div v-else-if="!hasContent" class="rd-empty">
+        <p>此周报没有上传文件。上传 Word/PDF 并确认预览后才能在此处查看。</p>
+      </div>
+      <el-empty v-else description="PDF 处理中或转换失败" :image-size="60" />
 
       <!-- 修订记录 -->
       <div v-if="report.revisions?.length" class="rd-revisions">

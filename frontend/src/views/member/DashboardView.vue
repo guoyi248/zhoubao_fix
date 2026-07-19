@@ -86,13 +86,12 @@ onMounted(async () => {
     <el-row :gutter="16" class="dash-cards">
       <el-col :span="8">
         <el-card shadow="hover">
-          <el-statistic title="周报状态" :value="isSubmitted ? '已提交' : '草稿'">
-            <template #suffix>
-              <el-tag :type="isSubmitted ? 'success' : 'warning'" size="small">
-                {{ isSubmitted ? '✓' : '待提交' }}
-              </el-tag>
-            </template>
-          </el-statistic>
+          <div style="text-align:center">
+            <div style="font-size:24px;font-weight:bold">{{ isSubmitted ? '已提交' : '草稿' }}</div>
+            <div style="font-size:12px;color:#999">周报状态
+              <el-tag :type="isSubmitted ? 'success' : 'warning'" size="small" style="margin-left:4px">{{ isSubmitted ? '✓' : '待提交' }}</el-tag>
+            </div>
+          </div>
           <p class="card-hint" v-if="!isSubmitted">请在截止时间前完成提交</p>
           <p class="card-hint" v-else>管理员可在组会中查看</p>
         </el-card>
@@ -100,18 +99,20 @@ onMounted(async () => {
 
       <el-col :span="8" v-if="userStore.isAdmin">
         <el-card shadow="hover">
-          <el-statistic title="已提交" :value="submissionCount">
-            <template #suffix><span style="font-size:14px">份</span></template>
-          </el-statistic>
+          <div style="text-align:center">
+            <div style="font-size:24px;font-weight:bold">{{ submissionCount }} <span style="font-size:14px">份</span></div>
+            <div style="font-size:12px;color:#999">已提交</div>
+          </div>
           <p class="card-hint">本周已提交周报</p>
         </el-card>
       </el-col>
 
       <el-col :span="8">
         <el-card shadow="hover">
-          <el-statistic title="当前周期" :value="weekLabel">
-            <template #suffix><span style="font-size:14px">/ 2026</span></template>
-          </el-statistic>
+          <div style="text-align:center">
+            <div style="font-size:24px;font-weight:bold">{{ weekLabel }}</div>
+            <div style="font-size:12px;color:#999">当前周期</div>
+          </div>
           <p class="card-hint">{{ deadlineText }}</p>
         </el-card>
       </el-col>
