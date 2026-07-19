@@ -64,8 +64,7 @@ function startPolling() {
 
 async function loadAttachments(reportId: string) {
   try {
-    const { data } = await api.get(`/me/reports/${reportId}`);
-    // No direct attachments list endpoint, skip for now
+    await api.get(`/me/reports/${reportId}`);
   } catch {}
 }
 
