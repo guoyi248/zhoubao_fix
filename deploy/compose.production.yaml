@@ -42,6 +42,8 @@ services:
         condition: service_healthy
     expose:
       - "8000"
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
     networks:
       - backend
       - frontend
@@ -57,7 +59,7 @@ services:
     tmpfs:
       - /tmp:size=256m
 
-  # ── Worker: Core ────────────────────────────────────
+  # ── Worker: Core (需访问宿主机 Redis + S3) ─────────
   worker-core:
     build:
       context: ..
@@ -73,6 +75,8 @@ services:
     depends_on:
       postgres:
         condition: service_healthy
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
     networks:
       - backend
     security_opt:
@@ -83,7 +87,7 @@ services:
     tmpfs:
       - /tmp:size=256m
 
-  # ── Worker: Preview ─────────────────────────────────
+  # ── Worker: Preview (需访问宿主机 MinIO) ──────────
   worker-preview:
     build:
       context: ..
@@ -101,6 +105,8 @@ services:
         condition: service_healthy
     volumes:
       - ./fonts:/usr/local/share/fonts/company:ro
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
     networks:
       - backend
     security_opt:
