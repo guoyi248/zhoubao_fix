@@ -52,6 +52,9 @@ class UpdateActionItemSerializer(serializers.Serializer):
 class ReportSnapshotSerializer(serializers.ModelSerializer):
     member_name = serializers.CharField(source="member.display_name")
     member_department = serializers.CharField(source="member.department.name", default="")
+    report_id = serializers.UUIDField(source="report_revision.report_id", read_only=True)
+    confirmed_pdf_attachment_id = serializers.UUIDField(source="report_revision.confirmed_pdf_attachment_id", read_only=True, allow_null=True)
+    structured_content = serializers.JSONField(source="report_revision.structured_content_json", read_only=True)
 
     class Meta:
         model = MeetingReportSnapshot
@@ -61,6 +64,9 @@ class ReportSnapshotSerializer(serializers.ModelSerializer):
             "member_name",
             "member_department",
             "report_revision_id",
+            "report_id",
+            "confirmed_pdf_attachment_id",
+            "structured_content",
             "display_order",
         ]
 

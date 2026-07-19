@@ -55,9 +55,40 @@ FORBIDDEN_EXTENSIONS = {
     ".scr", ".msi", ".com",
 }
 
-def detect_mime(file_bytes: bytes) -> str:
-    """使用 libmagic 检测文件真实 MIME 类型。"""
-    return magic.from_buffer(file_bytes[:4096], mime=True)
+# 扩展名到 MIME 映射（libmagic 回退用）
+EXT_TO_MIME = {
+    ".docx": "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+    ".xlsx": "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+    ".pptx": "application/vnd.openxmlformats-officedocument.presentationml.presentation",
+    ".doc": "application/msword",
+    ".xls": "application/vnd.ms-excel",
+    ".ppt": "application/vnd.ms-powerpoint",
+    ".pdf": "application/pdf",
+    ".txt": "text/plain",
+    ".md": "text/markdown",
+    ".csv": "text/csv",
+    ".png": "image/png",
+    ".jpg": "image/jpeg",
+    ".jpeg": "image/jpeg",
+    ".webp": "image/webp",
+    ".odt": "application/vnd.oasis.opendocument.text",
+    ".ods": "application/vnd.oasis.opendocument.spreadsheet",
+    ".rtf": "application/rtf",
+}
+
+
+def detect_mime(file_bytes: bytes, filename: str = "") -> str:
+    """使用 libmagic 检测文件真实 MIME 类型。失败时用扩展名回退。"""
+    if _has_libmagic:
+        result = magic.from_buffer(file_bytes[:4096], mime=True)
+        if result and result != "application/octet-stream":
+            return result
+    # 回退：扩展名检测
+    if filename:
+        ext = os.path.splitext(filename)[1].lower()
+        if ext in EXT_TO_MIME:
+            return EXT_TO_MIME[ext]
+    return "application/octet-stream"
 
 
 def get_level(mime_type: str) -> str:

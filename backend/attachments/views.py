@@ -105,9 +105,9 @@ def upload_attachment(request, report_id):
         storage.delete_object(settings.S3_BUCKET_ORIGINALS, f"_quarantine/{attachment_uuid}/source")
         raise FileTooLargeError()
 
-    # MIME 检测（取文件前 4KB）
+    # MIME 检测（取文件前 4KB + 文件名回退）
     uploaded_file.seek(0)
-    mime_type = detect_mime(uploaded_file.read(4096))
+    mime_type = detect_mime(uploaded_file.read(4096), uploaded_file.name)
     level = get_level(mime_type)
 
     # 创建附件记录（状态：quarantined）
@@ -135,13 +135,18 @@ def upload_attachment(request, report_id):
         f"_quarantine/{attachment_uuid}/source",
     )
 
-    # 触发异步扫描
+    # 开发模式：直接同步处理
     if level == "C":
-        # C 级文件仅保存，不扫描不转换
         attachment.status = AttachmentStatus.READY
         attachment.save(update_fields=["status"])
+    elif level == "A" and attachment.detected_mime == "application/pdf":
+        # PDF 直传：直接可用为预览
+        attachment.status = AttachmentStatus.PREVIEW_READY
+        attachment.save(update_fields=["status"])
     else:
-        scan_file.delay(str(attachment.id))
+        # Office 文件：标记为已存储，需 Worker 进一步处理
+        attachment.status = AttachmentStatus.STORED
+        attachment.save(update_fields=["status"])
 
     return Response(
         AttachmentDetailSerializer(attachment).data,
