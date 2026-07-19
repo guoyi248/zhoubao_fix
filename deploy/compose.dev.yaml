@@ -158,6 +158,16 @@ services:
     networks:
       - devnet
 
+  # ── Gotenberg（可选）：高保真 Office→PDF 转换 ──────────
+  gotenberg:
+    image: gotenberg/gotenberg:8
+    restart: unless-stopped
+    ports:
+      - "3000:3000"
+    networks:
+      - devnet
+    profiles: ["full"]
+
   # ── ClamAV ────────────────────────────────────────────
   clamav:
     image: clamav/clamav:latest

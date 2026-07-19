@@ -116,34 +116,80 @@ def _setup_font(pdf: FPDF):
     pdf.set_font("Helvetica", size=12)
 
 
+def convert_via_gotenberg(file_bytes: bytes, filename: str) -> bytes | None:
+    """
+    通过 Gotenberg HTTP API 转换 Office 文件为 PDF。
+    Gotenberg: docker run -p 3000:3000 gotenberg/gotenberg:8
+    API docs: https://gotenberg.dev/docs/routes#convert-office-documents
+    """
+    import requests
+    gotenberg_url = "http://localhost:3000/forms/libreoffice/convert"
+    try:
+        resp = requests.post(
+            gotenberg_url,
+            files={"files": (filename, file_bytes)},
+            timeout=120,
+        )
+        if resp.status_code == 200:
+            return resp.content
+        logger.warning("Gotenberg returned %d", resp.status_code)
+    except Exception as e:
+        logger.warning("Gotenberg not available: %s", e)
+    return None
+
+
+def convert_via_api(file_bytes: bytes, filename: str) -> bytes | None:
+    """
+    通过外部 API 转换（兜底）。
+    配置 GOTENBERG_URL 环境变量指向 Gotenberg 服务即可启用。
+    如未配置则跳过。
+    """
+    import os
+    url = os.environ.get("GOTENBERG_URL", "")
+    if url:
+        import requests
+        try:
+            resp = requests.post(
+                f"{url}/forms/libreoffice/convert",
+                files={"files": (filename, file_bytes)},
+                timeout=120,
+            )
+            if resp.status_code == 200:
+                return resp.content
+        except Exception:
+            pass
+    return None
+
+
 def office_to_pdf(file_bytes: bytes, mime_type: str, filename: str) -> bytes:
     """
     统一入口：将 Office/Text 文件转为 PDF。
-    返回 PDF bytes。不支持的类型返回 None。
+    三级兜底：1) 纯 Python → 2) Gotenberg API → 3) 失败
     """
+    result = None
+
+    # 1. 纯 Python 转换
     if mime_type in ("text/plain", "text/markdown", "text/csv"):
         content = file_bytes.decode("utf-8", errors="replace")
-        return convert_txt_to_pdf(content)
-    if "wordprocessingml" in mime_type or "msword" in mime_type or filename.endswith(".docx"):
-        return convert_docx_to_pdf(file_bytes)
-    if "spreadsheetml" in mime_type or "ms-excel" in mime_type:
-        # XLSX: 用 openpyxl 提取内容转 PDF
+        result = convert_txt_to_pdf(content)
+    elif "wordprocessingml" in mime_type or "msword" in mime_type or filename.endswith((".docx", ".doc")):
+        result = convert_docx_to_pdf(file_bytes)
+    elif "spreadsheetml" in mime_type or "ms-excel" in mime_type or filename.endswith((".xlsx", ".xls")):
         try:
             import openpyxl
             wb = openpyxl.load_workbook(io.BytesIO(file_bytes), read_only=True)
             lines = []
-            for sheet_name in wb.sheetnames[:3]:  # 最多3个sheet
+            for sheet_name in wb.sheetnames[:3]:
                 ws = wb[sheet_name]
                 lines.append(f"[{sheet_name}]")
                 for row in ws.iter_rows(values_only=True):
-                    row_text = " | ".join(str(c) if c else "" for c in row)
-                    lines.append(row_text)
+                    lines.append(" | ".join(str(c) if c else "" for c in row))
                 lines.append("")
             wb.close()
-            return convert_txt_to_pdf("\n".join(lines))
+            result = convert_txt_to_pdf("\n".join(lines))
         except Exception:
-            return None
-    if "presentation" in mime_type:
+            result = None
+    elif "presentation" in mime_type or filename.endswith((".pptx", ".ppt")):
         try:
             from pptx import Presentation
             prs = Presentation(io.BytesIO(file_bytes))
@@ -152,9 +198,21 @@ def office_to_pdf(file_bytes: bytes, mime_type: str, filename: str) -> bytes:
                 for shape in slide.shapes:
                     if shape.has_text_frame:
                         lines.append(shape.text_frame.text)
-            return convert_txt_to_pdf("\n\n".join(lines))
+            result = convert_txt_to_pdf("\n\n".join(lines))
         except Exception:
-            return None
+            result = None
+
+    if result and len(result) > 100:
+        return result
+
+    # 2. Gotenberg 兜底（如果已部署 Docker 容器）
+    result = convert_via_api(file_bytes, filename)
+    if result and len(result) > 100:
+        logger.info("Used Gotenberg fallback for %s", filename)
+        return result
+
+    # 3. 都失败了
+    logger.warning("All converters failed for %s (%s)", filename, mime_type)
     return None
 
 
