@@ -13,8 +13,7 @@ services:
       dockerfile: docker/nginx.Dockerfile
     restart: unless-stopped
     ports:
-      - "80:80"
-      - "443:443"
+      - "8080:80"
     depends_on:
       api:
         condition: service_healthy
