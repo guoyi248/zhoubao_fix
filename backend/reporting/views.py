@@ -215,10 +215,10 @@ def resubmit_report(request, report_id):
             status=status.HTTP_409_CONFLICT,
         )
 
-    # 状态设为 RESUBMITTED 表示可编辑
-    report.status = ReportStatus.RESUBMITTED
+    # 重新打开编辑
+    report.status = ReportStatus.DRAFT
     report.save(update_fields=["status"])
-    return submit_report(request)
+    return Response({"detail": "周报已重新打开，可以上传新文件", "status": "draft"})
 
 
 @api_view(["GET"])

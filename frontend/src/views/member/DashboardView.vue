@@ -49,9 +49,13 @@ async function correctReport() {
   await ElMessageBox.confirm("上传新文件将覆盖当前已提交的周报。继续？", "更正周报", { type: "warning" });
   correcting.value = true;
   try {
-    await api.post(`/me/reports/${report.value.id}/resubmit`, {});
+    const { data } = await api.post(`/me/reports/${report.value.id}/resubmit`, {});
     report.value.status = "draft";
-  } catch (e: any) { ElMessage.error(e.message); correcting.value = false; }
+    ElMessage.success(data.detail || "可以上传新文件了");
+  } catch (e: any) {
+    ElMessage.error(e.response?.data?.message || e.message || "操作失败");
+    correcting.value = false;
+  }
 }
 
 async function handleCorrectUpload(file: any) {
@@ -103,10 +107,7 @@ function formatSize(b: number) { if (!b) return ""; return b < 1024 ? `${b}B` : 
       </div>
       <div class="header-actions">
         <el-button v-if="!isSubmitted" type="primary" size="large" @click="router.push('/reports/current')">填写本周周报</el-button>
-        <template v-else>
-          <el-tag type="success" size="large">已提交</el-tag>
-          <el-button type="warning" size="small" @click="correctReport">更正周报</el-button>
-        </template>
+        <el-tag v-else type="success" size="large">已提交</el-tag>
       </div>
     </div>
 
@@ -160,13 +161,16 @@ function formatSize(b: number) { if (!b) return ""; return b < 1024 ? `${b}B` : 
     <!-- 已提交 PDF 预览 -->
     <el-card v-if="isSubmitted && confirmedAtt" style="margin-top:12px">
       <template #header>提交的周报 PDF</template>
-      <iframe :src="`/api/v1/attachments/${confirmedAtt.id}/preview-content`" width="100%" height="500px" frameborder="0" />
+      <iframe :src="`/api/v1/attachments/${confirmedAtt.id}/preview-content`" width="100%" height="800px" frameborder="0" style="border:1px solid #e5e5e5;border-radius:4px" />
     </el-card>
 
     <!-- 快捷操作 -->
     <el-row :gutter="16" class="dash-actions" style="margin-top:16px">
       <el-col :span="6">
         <el-card shadow="hover" class="action-card" @click="router.push('/reports/current')"><span>✏️ 写周报</span></el-card>
+      </el-col>
+      <el-col :span="6" v-if="isSubmitted">
+        <el-card shadow="hover" class="action-card correct-card" @click="correctReport"><span>🔄 更正周报</span></el-card>
       </el-col>
       <el-col :span="6">
         <el-card shadow="hover" class="action-card" @click="router.push('/reports')"><span>📋 历史周报</span></el-card>
