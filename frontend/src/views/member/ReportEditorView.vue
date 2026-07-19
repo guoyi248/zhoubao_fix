@@ -20,7 +20,7 @@ const confirming = ref<string | null>(null);
 let pollTimer: ReturnType<typeof setInterval> | null = null;
 
 const weekLabel = computed(() => report.value ? `第 ${report.value.period.iso_week} 周` : "");
-const isEditable = computed(() => report.value?.status === "draft");
+const isEditable = computed(() => ["draft", "resubmitted"].includes(report.value?.status));
 
 const canSubmit = computed(() => {
   if (!attachments.value.length) return false;

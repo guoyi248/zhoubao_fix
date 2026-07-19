@@ -16,8 +16,9 @@ const correcting = ref(false);
 const uploading = ref(false);
 
 const isSubmitted = computed(() =>
-  report.value?.status === "submitted" || report.value?.status === "resubmitted",
+  report.value?.status === "submitted",
 );
+const isResubmitted = computed(() => report.value?.status === "resubmitted");
 const weekLabel = computed(() => report.value ? `第 ${report.value.period.iso_week} 周` : "");
 const deadlineText = computed(() => {
   if (!report.value?.period.deadline) return "";
@@ -50,7 +51,7 @@ async function correctReport() {
   correcting.value = true;
   try {
     const { data } = await api.post(`/me/reports/${report.value.id}/resubmit`, {});
-    report.value.status = "draft";
+    report.value.status = "resubmitted";
     ElMessage.success(data.detail || "可以上传新文件了");
   } catch (e: any) {
     ElMessage.error(e.response?.data?.message || e.message || "操作失败");
