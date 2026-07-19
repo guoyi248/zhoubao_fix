@@ -142,16 +142,40 @@ def upload_attachment(request, report_id):
         f"_quarantine/{attachment_uuid}/source",
     )
 
-    # 开发模式：直接同步处理
+    # 同步处理：PDF 直传可用，Office 文件用纯 Python 转换
     if level == "C":
         attachment.status = AttachmentStatus.READY
         attachment.save(update_fields=["status"])
-    elif level == "A" and attachment.detected_mime == "application/pdf":
-        # PDF 直传：直接可用为预览
+    elif is_pdf(mime_type):
         attachment.status = AttachmentStatus.PREVIEW_READY
         attachment.save(update_fields=["status"])
+    elif is_office_file(mime_type):
+        # 尝试纯 Python 转换
+        attachment.status = AttachmentStatus.CONVERTING
+        attachment.save(update_fields=["status"])
+        try:
+            from .converter import convert_and_store
+            from .models import AttachmentPreview
+            result = convert_and_store(attachment)
+            if result:
+                AttachmentPreview.objects.create(
+                    attachment=attachment,
+                    preview_object_key=result["object_key"],
+                    source_sha256=attachment.source_sha256,
+                    converter_name="python-fpdf2",
+                    converter_version="2.8",
+                    converter_image_digest="",
+                    output_sha256=result["sha256"],
+                    page_count=result["page_count"],
+                    status="ready",
+                )
+                attachment.status = AttachmentStatus.PREVIEW_READY
+            else:
+                attachment.status = AttachmentStatus.STORED
+        except Exception:
+            attachment.status = AttachmentStatus.STORED
+        attachment.save(update_fields=["status"])
     else:
-        # Office 文件：标记为已存储，需 Worker 进一步处理
         attachment.status = AttachmentStatus.STORED
         attachment.save(update_fields=["status"])
 
