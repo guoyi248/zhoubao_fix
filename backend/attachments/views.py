@@ -71,12 +71,11 @@ def upload_attachment(request, report_id):
             status=status.HTTP_400_BAD_REQUEST,
         )
 
-    # ── 统一命名：hubu_W{iso_week}_{username}_{date}.{ext} ──
+    # ── 统一命名：hubu_{姓名}_{周日日期}.{ext} ──
     _, ext = os.path.splitext(uploaded_file.name)
-    from django.utils import timezone as tz
-    today = tz.now().date()
-    iso_week = report.reporting_period.iso_week
-    safe_name = f"hubu_W{iso_week:02d}_{request.user.username}_{today.strftime('%Y%m%d')}{ext}"
+    display_name = request.user.display_name
+    sunday = report.reporting_period.end_date.strftime('%Y%m%d')  # ISO 周的周日
+    safe_name = f"hubu_{display_name}_{sunday}{ext}"
     uploaded_file.name = safe_name
 
     # 检查附件数量
@@ -431,10 +430,9 @@ def replace_attachment(request, attachment_id):
 
     # 统一命名
     _, ext = os.path.splitext(uploaded_file.name)
-    from django.utils import timezone as tz
-    today = tz.now().date()
-    iso_week = report.reporting_period.iso_week if report else 0
-    safe_name = f"hubu_W{iso_week:02d}_{request.user.username}_{today.strftime('%Y%m%d')}{ext}"
+    display_name = request.user.display_name
+    sunday = report.reporting_period.end_date.strftime('%Y%m%d')
+    safe_name = f"hubu_{display_name}_{sunday}{ext}"
     uploaded_file.name = safe_name
 
     # 上传新文件
