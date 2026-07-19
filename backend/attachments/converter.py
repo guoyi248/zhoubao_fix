@@ -163,56 +163,47 @@ def convert_via_api(file_bytes: bytes, filename: str) -> bytes | None:
 
 def office_to_pdf(file_bytes: bytes, mime_type: str, filename: str) -> bytes:
     """
-    统一入口：将 Office/Text 文件转为 PDF。
-    三级兜底：1) 纯 Python → 2) Gotenberg API → 3) 失败
+    统一入口：1) Gotenberg API（首选）→ 2) 纯 Python（兜底）→ 3) 失败
     """
-    result = None
-
-    # 1. 纯 Python 转换
+    # 文本文件直接 Python 处理
     if mime_type in ("text/plain", "text/markdown", "text/csv"):
         content = file_bytes.decode("utf-8", errors="replace")
-        result = convert_txt_to_pdf(content)
-    elif "wordprocessingml" in mime_type or "msword" in mime_type or filename.endswith((".docx", ".doc")):
-        result = convert_docx_to_pdf(file_bytes)
-    elif "spreadsheetml" in mime_type or "ms-excel" in mime_type or filename.endswith((".xlsx", ".xls")):
+        return convert_txt_to_pdf(content)
+
+    # Office 文件：优先 Gotenberg
+    result = convert_via_api(file_bytes, filename)
+    if result and len(result) > 100:
+        return result
+
+    # Python 兜底
+    logger.info("Gotenberg not available, using Python fallback for %s", filename)
+    if "wordprocessingml" in mime_type or "msword" in mime_type or filename.endswith((".docx", ".doc")):
+        return convert_docx_to_pdf(file_bytes)
+    if "spreadsheetml" in mime_type or "ms-excel" in mime_type or filename.endswith((".xlsx", ".xls")):
         try:
             import openpyxl
             wb = openpyxl.load_workbook(io.BytesIO(file_bytes), read_only=True)
             lines = []
             for sheet_name in wb.sheetnames[:3]:
-                ws = wb[sheet_name]
-                lines.append(f"[{sheet_name}]")
+                ws = wb[sheet_name]; lines.append(f"[{sheet_name}]")
                 for row in ws.iter_rows(values_only=True):
                     lines.append(" | ".join(str(c) if c else "" for c in row))
                 lines.append("")
             wb.close()
-            result = convert_txt_to_pdf("\n".join(lines))
+            return convert_txt_to_pdf("\n".join(lines))
         except Exception:
-            result = None
-    elif "presentation" in mime_type or filename.endswith((".pptx", ".ppt")):
+            return None
+    if "presentation" in mime_type or filename.endswith((".pptx", ".ppt")):
         try:
             from pptx import Presentation
             prs = Presentation(io.BytesIO(file_bytes))
             lines = []
             for slide in prs.slides:
                 for shape in slide.shapes:
-                    if shape.has_text_frame:
-                        lines.append(shape.text_frame.text)
-            result = convert_txt_to_pdf("\n\n".join(lines))
+                    if shape.has_text_frame: lines.append(shape.text_frame.text)
+            return convert_txt_to_pdf("\n\n".join(lines))
         except Exception:
-            result = None
-
-    if result and len(result) > 100:
-        return result
-
-    # 2. Gotenberg 兜底（如果已部署 Docker 容器）
-    result = convert_via_api(file_bytes, filename)
-    if result and len(result) > 100:
-        logger.info("Used Gotenberg fallback for %s", filename)
-        return result
-
-    # 3. 都失败了
-    logger.warning("All converters failed for %s (%s)", filename, mime_type)
+            return None
     return None
 
 

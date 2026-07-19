@@ -63,6 +63,9 @@ EXT_TO_MIME = {
     ".doc": "application/msword",
     ".xls": "application/vnd.ms-excel",
     ".ppt": "application/vnd.ms-powerpoint",
+    ".docm": "application/vnd.ms-word.document.macroenabled.12",
+    ".xlsm": "application/vnd.ms-excel.sheet.macroenabled.12",
+    ".pptm": "application/vnd.ms-powerpoint.presentation.macroenabled.12",
     ".pdf": "application/pdf",
     ".txt": "text/plain",
     ".md": "text/markdown",
@@ -73,17 +76,19 @@ EXT_TO_MIME = {
     ".webp": "image/webp",
     ".odt": "application/vnd.oasis.opendocument.text",
     ".ods": "application/vnd.oasis.opendocument.spreadsheet",
+    ".odp": "application/vnd.oasis.opendocument.presentation",
     ".rtf": "application/rtf",
 }
 
 
 def detect_mime(file_bytes: bytes, filename: str = "") -> str:
-    """使用 libmagic 检测文件真实 MIME 类型。失败时用扩展名回退。"""
+    """使用 libmagic 检测文件真实 MIME 类型。泛型结果时用扩展名回退。"""
+    generic_types = {"application/octet-stream", "application/zip", "application/x-ole-storage"}
     if _has_libmagic:
         result = magic.from_buffer(file_bytes[:4096], mime=True)
-        if result and result != "application/octet-stream":
+        if result and result not in generic_types:
             return result
-    # 回退：扩展名检测
+    # 回退：扩展名检测（处理 XLSX/DOCX 是 ZIP、DOC/XLS 是 OLE 的情况）
     if filename:
         ext = os.path.splitext(filename)[1].lower()
         if ext in EXT_TO_MIME:
