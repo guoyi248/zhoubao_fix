@@ -177,6 +177,13 @@ def submit_report(request, report_id):
         confirmed_pdf = get_object_or_404(
             Attachment, id=data["confirmed_pdf_attachment_id"], report=report
         )
+    else:
+        # 自动选第一个 user_confirmed 或 preview_ready 或 ready 的附件
+        from attachments.models import Attachment
+        confirmed_pdf = Attachment.objects.filter(
+            report=report,
+            status__in=["user_confirmed", "preview_ready", "ready", "ready_with_warning"],
+        ).first()
 
     revision = report.submit(
         submitted_by=request.user,
