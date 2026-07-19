@@ -1,0 +1,1 @@
+# Root tests package — prevents import conflicts with app-level tests/

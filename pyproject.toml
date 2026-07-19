@@ -1,0 +1,61 @@
+[project]
+name = "weekly-report"
+version = "0.1.0"
+description = "周报整合系统 — 模块化单体后端"
+requires-python = ">=3.13"
+readme = "README.md"
+license = { text = "Proprietary" }
+
+dependencies = [
+    "django>=5.2,<5.3",
+    "djangorestframework>=3.16,<4.0",
+    "django-cors-headers>=4.7,<5.0",
+    "celery[redis]>=5.6.3,<5.7",
+    "redis>=5.2,<6.0",
+    "psycopg[binary]>=3.2,<4.0",
+    "boto3>=1.37,<2.0",
+    "botocore>=1.37,<2.0",
+    "Pillow>=11.0,<12.0",
+    "PyMuPDF>=1.25,<2.0",
+    "argon2-cffi>=23.0,<24.0",
+    "django-otp>=1.6,<2.0",
+    "gunicorn>=23.0,<24.0",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=8.3,<9.0",
+    "pytest-django>=4.10,<5.0",
+    "factory-boy>=3.3,<4.0",
+    "freezegun>=1.5,<2.0",
+    "coverage>=7.7,<8.0",
+    "django-extensions>=3.2,<4.0",
+    "ipython>=9.0,<10.0",
+]
+
+[tool.setuptools.packages.find]
+where = ["backend"]
+
+[tool.pytest.ini_options]
+DJANGO_SETTINGS_MODULE = "config.settings.test"
+pythonpath = ["backend"]
+testpaths = ["backend"]
+addopts = "--tb=short --strict-markers"
+markers = [
+    "slow: marks tests as slow",
+    "integration: marks tests as integration tests",
+]
+
+[tool.coverage.run]
+source = ["backend"]
+omit = ["*/migrations/*", "*/tests/*"]
+
+[tool.coverage.report]
+fail_under = 80
+exclude_also = [
+    "def __repr__",
+    "def __str__",
+    "raise NotImplementedError",
+    "if TYPE_CHECKING:",
+    "class .*\bProtocol\b",
+]

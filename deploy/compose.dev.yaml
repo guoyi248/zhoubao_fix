@@ -1,0 +1,178 @@
+# ── 开发环境全栈 Compose：一键启动 8 个容器 ────────────
+# docker compose -f deploy/compose.yaml -f deploy/compose.dev.yaml up -d
+# 前端: http://localhost:5173   API: http://localhost:8000
+
+name: weekly-report-dev
+
+services:
+  # ── API: Django dev server ────────────────────────────
+  api:
+    build:
+      context: ..
+      dockerfile: docker/api.Dockerfile
+    restart: unless-stopped
+    command: python manage.py runserver 0.0.0.0:8000
+    environment:
+      - DJANGO_SETTINGS_MODULE=config.settings.development
+      - DATABASE_HOST=postgres
+      - DATABASE_PORT=5432
+      - DATABASE_NAME=weekly_report
+      - DATABASE_USER=weekly_app
+      - DATABASE_PASSWORD=dev_password
+      - REDIS_URL=redis://redis:6379/0
+      - S3_ENDPOINT=http://minio:9000
+      - S3_ACCESS_KEY=minioadmin
+      - S3_SECRET_KEY=minioadmin
+      - CLAMAV_HOST=clamav
+      - CLAMAV_PORT=3310
+    ports:
+      - "8000:8000"
+    volumes:
+      - ../backend:/app
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    networks:
+      - devnet
+
+  # ── Worker Core ───────────────────────────────────────
+  worker-core:
+    build:
+      context: ..
+      dockerfile: docker/worker.Dockerfile
+    restart: unless-stopped
+    command: celery -A config worker -Q default,ai --concurrency=2 --loglevel=INFO
+    environment:
+      - DJANGO_SETTINGS_MODULE=config.settings.development
+      - DATABASE_HOST=postgres
+      - DATABASE_PORT=5432
+      - DATABASE_NAME=weekly_report
+      - DATABASE_USER=weekly_app
+      - DATABASE_PASSWORD=dev_password
+      - REDIS_URL=redis://redis:6379/0
+      - S3_ENDPOINT=http://minio:9000
+      - S3_ACCESS_KEY=minioadmin
+      - S3_SECRET_KEY=minioadmin
+      - CLAMAV_HOST=clamav
+      - CLAMAV_PORT=3310
+    volumes:
+      - ../backend:/app
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    networks:
+      - devnet
+
+  # ── Worker Preview ────────────────────────────────────
+  worker-preview:
+    build:
+      context: ..
+      dockerfile: docker/worker.Dockerfile
+    restart: unless-stopped
+    command: celery -A config worker -Q preview --concurrency=1 --max-tasks-per-child=10 --loglevel=INFO
+    environment:
+      - DJANGO_SETTINGS_MODULE=config.settings.development
+      - DATABASE_HOST=postgres
+      - DATABASE_PORT=5432
+      - DATABASE_NAME=weekly_report
+      - DATABASE_USER=weekly_app
+      - DATABASE_PASSWORD=dev_password
+      - REDIS_URL=redis://redis:6379/0
+      - S3_ENDPOINT=http://minio:9000
+      - S3_ACCESS_KEY=minioadmin
+      - S3_SECRET_KEY=minioadmin
+      - CLAMAV_HOST=clamav
+      - CLAMAV_PORT=3310
+    volumes:
+      - ../backend:/app
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    networks:
+      - devnet
+
+  # ── Frontend: Vite dev server ─────────────────────────
+  frontend:
+    image: node:22-bookworm-slim
+    restart: unless-stopped
+    working_dir: /frontend
+    command: sh -c "npm install && npm run dev -- --host 0.0.0.0"
+    ports:
+      - "5173:5173"
+    volumes:
+      - ../frontend:/frontend
+      - frontend_modules:/frontend/node_modules
+    networks:
+      - devnet
+    depends_on:
+      - api
+
+  # ── Postgres ──────────────────────────────────────────
+  postgres:
+    image: postgres:17-bookworm
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: weekly_report
+      POSTGRES_USER: weekly_app
+      POSTGRES_PASSWORD: dev_password
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    networks:
+      - devnet
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U weekly_app -d weekly_report"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+
+  # ── Redis ─────────────────────────────────────────────
+  redis:
+    image: redis:7.4-bookworm
+    restart: unless-stopped
+    volumes:
+      - redisdata:/data
+    networks:
+      - devnet
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+
+  # ── MinIO ─────────────────────────────────────────────
+  minio:
+    image: quay.io/minio/minio:latest
+    restart: unless-stopped
+    command: server /data --console-address ":9001"
+    environment:
+      MINIO_ROOT_USER: minioadmin
+      MINIO_ROOT_PASSWORD: minioadmin
+    volumes:
+      - miniodata:/data
+    networks:
+      - devnet
+
+  # ── ClamAV ────────────────────────────────────────────
+  clamav:
+    image: clamav/clamav:latest
+    restart: unless-stopped
+    volumes:
+      - clamavdata:/var/lib/clamav
+    networks:
+      - devnet
+
+volumes:
+  pgdata:
+  redisdata:
+  miniodata:
+  clamavdata:
+  frontend_modules:
+
+networks:
+  devnet:
