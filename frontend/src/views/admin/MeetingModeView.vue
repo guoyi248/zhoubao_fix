@@ -11,7 +11,6 @@ const currentIndex = ref(0);
 const previewUrl = ref("");
 const loading = ref(true);
 const states = ref<Record<string, any>>({});
-const showSidebar = ref(true);
 const isFullscreen = ref(false);
 
 const current = computed(() => snapshots.value[currentIndex.value]);
