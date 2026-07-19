@@ -9,7 +9,8 @@ from django.utils import timezone
 from django.shortcuts import get_object_or_404
 
 from rest_framework import status
-from rest_framework.decorators import api_view
+from rest_framework.decorators import api_view, parser_classes
+from rest_framework.parsers import MultiPartParser
 from rest_framework.response import Response
 
 from .models import (
@@ -222,6 +223,7 @@ def resubmit_report(request, report_id):
 
 
 @api_view(["POST"])
+@parser_classes([MultiPartParser])
 @transaction.atomic
 def correct_report(request, report_id):
     """
@@ -230,7 +232,7 @@ def correct_report(request, report_id):
     无需多步操作。
     """
     import os, uuid
-    from django.utils import timezone as tz
+    from django.conf import settings
     from attachments.models import Attachment, AttachmentStatus, AttachmentPreview
     from attachments.mime_utils import detect_mime, get_level, is_pdf, is_office_file
     from attachments.converter import convert_and_store
