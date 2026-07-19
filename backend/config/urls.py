@@ -72,6 +72,9 @@ urlpatterns = [
 ]
 
 if settings.DEBUG:
+    from django.conf.urls.static import static
+    from django.conf import settings as s
+    urlpatterns += static("/media/", document_root=getattr(s, "MEDIA_ROOT", s.BASE_DIR / "media"))
     urlpatterns += [
         path("api/v1/auth/", include("rest_framework.urls", namespace="rest_framework")),
     ]

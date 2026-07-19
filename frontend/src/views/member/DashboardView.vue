@@ -145,7 +145,6 @@ async function confirmCorrection() {
   }
 }
 
-function formatSize(b: number) { if (!b) return ""; return b < 1024 ? `${b}B` : b < 1048576 ? `${(b/1024).toFixed(1)}KB` : `${(b/1048576).toFixed(1)}MB`; }
 </script>
 
 <template>
