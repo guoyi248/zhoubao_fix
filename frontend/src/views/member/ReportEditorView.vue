@@ -17,7 +17,6 @@ const uploading = ref(false);
 const loading = ref(true);
 const submitting = ref(false);
 const confirming = ref<string | null>(null);
-const converting = ref(false);
 let pollTimer: ReturnType<typeof setInterval> | null = null;
 
 const weekLabel = computed(() => report.value ? `第 ${report.value.period.iso_week} 周` : "");
