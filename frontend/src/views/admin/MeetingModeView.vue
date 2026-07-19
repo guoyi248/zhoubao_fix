@@ -1,16 +1,18 @@
 <script setup lang="ts">
-import { ref, computed, onMounted } from "vue";
-import { useRoute } from "vue-router";
+import { ref, computed, onMounted, onUnmounted } from "vue";
+import { useRoute, useRouter } from "vue-router";
 import api from "@/utils/api";
 
 const route = useRoute();
+const router = useRouter();
 const meeting = ref<any>(null);
 const snapshots = ref<any[]>([]);
 const currentIndex = ref(0);
-const currentReport = ref<any>(null);
 const previewUrl = ref("");
 const loading = ref(true);
 const states = ref<Record<string, any>>({});
+const showSidebar = ref(true);
+const isFullscreen = ref(false);
 
 const current = computed(() => snapshots.value[currentIndex.value]);
 const total = computed(() => snapshots.value.length);
@@ -23,18 +25,23 @@ onMounted(async () => {
     states.value = data.report_states || {};
     if (snapshots.value.length) loadReport(0);
   } finally { loading.value = false; }
+  document.addEventListener("keydown", onKey);
 });
+onUnmounted(() => document.removeEventListener("keydown", onKey));
 
-async function loadReport(idx: number) {
+function onKey(e: KeyboardEvent) {
+  if (e.target instanceof HTMLInputElement || e.target instanceof HTMLTextAreaElement) return;
+  if (e.key === "ArrowLeft") prev();
+  if (e.key === "ArrowRight") next();
+  if (e.key === "f" || e.key === "F") toggleFullscreen();
+  if (e.key === "d" || e.key === "D") toggleDiscussed();
+}
+
+function loadReport(idx: number) {
   currentIndex.value = idx;
   previewUrl.value = "";
   const snap = snapshots.value[idx];
   if (!snap) return;
-  currentReport.value = {
-    member_name: snap.member_name,
-    member_department: snap.member_department,
-    structured_content: snap.structured_content,
-  };
   if (snap.confirmed_pdf_attachment_id) {
     previewUrl.value = `/api/v1/attachments/${snap.confirmed_pdf_attachment_id}/preview-content`;
   }
@@ -42,6 +49,7 @@ async function loadReport(idx: number) {
 
 function prev() { if (currentIndex.value > 0) loadReport(currentIndex.value - 1); }
 function next() { if (currentIndex.value < total.value - 1) loadReport(currentIndex.value + 1); }
+function goTo(val: any) { loadReport(Number(val)); }
 
 async function toggleDiscussed() {
   const snap = current.value;
@@ -52,97 +60,143 @@ async function toggleDiscussed() {
     states.value[snap.member_id] = { ...st, discussed: !st.discussed };
   } catch {}
 }
+
+function toggleFullscreen() {
+  if (!document.fullscreenElement) {
+    document.documentElement.requestFullscreen();
+    isFullscreen.value = true;
+  } else {
+    document.exitFullscreen();
+    isFullscreen.value = false;
+  }
+}
 </script>
 
 <template>
   <div class="meeting" v-loading="loading">
     <!-- Top bar -->
     <div class="meeting-bar">
-      <span><strong>组会模式</strong> · {{ total }} 人</span>
-      <span>{{ currentIndex + 1 }} / {{ total }}</span>
-      <div>
-        <el-button size="small" @click="prev" :disabled="currentIndex===0">上一位</el-button>
-        <el-button size="small" @click="next" :disabled="currentIndex>=total-1">下一位</el-button>
-        <el-button size="small" @click="toggleDiscussed" :type="states[current?.member_id]?.discussed ? 'success' : 'default'">
+      <div class="bar-left">
+        <strong>组会模式</strong>
+        <el-select v-model="currentIndex" @change="goTo" size="small" style="width:180px;margin-left:12px" placeholder="选择成员">
+          <el-option v-for="(s, i) in snapshots" :key="s.id" :label="`${states[s.member_id]?.discussed ? '✓ ' : ''}${s.member_name} · ${s.member_department}`" :value="i" />
+        </el-select>
+        <span style="margin-left:8px;font-size:13px;color:#999">{{ currentIndex + 1 }} / {{ total }}</span>
+      </div>
+      <div class="bar-center">
+        <el-button-group size="small">
+          <el-button @click="prev" :disabled="currentIndex===0">← 上一位</el-button>
+          <el-button @click="next" :disabled="currentIndex>=total-1">下一位 →</el-button>
+        </el-button-group>
+        <el-button size="small" @click="toggleDiscussed" :type="states[current?.member_id]?.discussed ? 'success' : 'default'" style="margin-left:8px">
           {{ states[current?.member_id]?.discussed ? '✓ 已讨论' : '标记已讨论' }}
         </el-button>
       </div>
+      <div class="bar-right">
+        <el-button size="small" @click="toggleFullscreen">{{ isFullscreen ? '退出全屏' : '全屏' }}</el-button>
+        <el-button size="small" type="danger" @click="router.push('/admin/reports')">退出组会</el-button>
+      </div>
     </div>
 
-    <!-- Body -->
+    <!-- Body: PDF full page -->
     <div class="meeting-body">
-      <!-- Left: Member list -->
-      <div class="member-list">
-        <div v-for="(s, i) in snapshots" :key="s.id"
-          :class="['member-item', { current: i === currentIndex, discussed: states[s.member_id]?.discussed }]"
-          @click="loadReport(i)">
-          <span class="dot">{{ states[s.member_id]?.discussed ? '✓' : '○' }}</span>
-          {{ s.member_name }}
-          <span class="dept">{{ s.member_department }}</span>
+      <template v-if="current && previewUrl">
+        <!-- Member info overlay -->
+        <div class="pdf-header">
+          <span>{{ current.member_name }} · {{ current.member_department }}</span>
+          <span>Revision #{{ current.report_revision_id?.slice(0,8) || '?' }}</span>
         </div>
+        <!-- Full PDF -->
+        <iframe :src="previewUrl" class="pdf-full" frameborder="0" />
+      </template>
+      <div v-else-if="current" class="no-pdf">
+        <el-empty description="该成员未上传 PDF 周报" :image-size="80" />
+        <p style="text-align:center;color:#999;font-size:13px">{{ current.member_name }} · {{ current.member_department }}</p>
       </div>
+      <el-empty v-else description="请选择成员查看周报" :image-size="100" />
+    </div>
 
-      <!-- Middle: Report content + PDF -->
-      <div class="report-area">
-        <template v-if="current">
-          <h3>{{ current.member_name }} · {{ current.member_department }}</h3>
-
-          <!-- 结构化内容 -->
-          <div v-if="currentReport?.structured_content" class="content-box">
-            <div v-if="currentReport.structured_content.completed?.length">
-              <strong>本周完成：</strong>
-              <ul><li v-for="c in currentReport.structured_content.completed" :key="c">{{ c }}</li></ul>
-            </div>
-            <div v-if="currentReport.structured_content.risks?.length">
-              <strong>风险：</strong>{{ currentReport.structured_content.risks.join('；') }}
-            </div>
-            <div v-if="currentReport.structured_content.next_week?.length">
-              <strong>下周：</strong>
-              <ul><li v-for="n in currentReport.structured_content.next_week" :key="n">{{ n }}</li></ul>
-            </div>
-          </div>
-
-          <!-- PDF preview -->
-          <div v-if="previewUrl" class="pdf-box">
-            <iframe :src="previewUrl" width="100%" height="500px" frameborder="0" />
-            <p><a :href="previewUrl" target="_blank">新窗口打开 PDF</a></p>
-          </div>
-          <el-empty v-else description="暂无预览 PDF" :image-size="60" />
-        </template>
-        <el-empty v-else description="请选择成员" />
-      </div>
-
-      <!-- Right: Actions -->
-      <div class="action-panel">
-        <h4>行动项</h4>
-        <div v-for="a in (meeting?.action_items || [])" :key="a.id" class="action-item">
-          <span :class="{ done: a.status === 'done' }">{{ a.title }}</span>
-          <span class="action-meta">{{ a.owner_name || '待分配' }}</span>
-        </div>
-        <el-empty v-if="!meeting?.action_items?.length" description="暂无" :image-size="40" />
-      </div>
+    <!-- Bottom bar: quick nav -->
+    <div class="meeting-footer">
+      <span>← → 切换</span>
+      <span>D 标记讨论</span>
+      <span>F 全屏</span>
     </div>
   </div>
 </template>
 
 <style scoped>
-.meeting { display:flex; flex-direction:column; height:100vh; background:#fff; }
-.meeting-bar { display:flex; align-items:center; justify-content:space-between; padding:8px 16px; border-bottom:1px solid #eee; flex-shrink:0; }
-.meeting-body { display:flex; flex:1; overflow:hidden; }
-.member-list { width:180px; border-right:1px solid #eee; overflow-y:auto; flex-shrink:0; }
-.member-item { padding:10px 12px; cursor:pointer; border-bottom:1px solid #f5f5f5; font-size:14px; }
-.member-item:hover { background:#f0f5ff; }
-.member-item.current { background:#e6f0ff; font-weight:600; }
-.member-item.discussed { opacity:0.6; }
-.dot { margin-right:4px; }
-.dept { display:block; font-size:11px; color:#999; }
-.report-area { flex:1; padding:16px; overflow-y:auto; }
-.report-area h3 { margin:0 0 12px; }
-.pdf-box { border:1px solid #e5e5e5; border-radius:6px; overflow:hidden; }
-.pdf-box p { padding:6px 12px; font-size:12px; margin:0; }
-.action-panel { width:220px; border-left:1px solid #eee; padding:12px; overflow-y:auto; flex-shrink:0; }
-.action-panel h4 { margin:0 0 8px; font-size:13px; }
-.action-item { padding:6px 8px; margin-bottom:4px; background:#f8f8f8; border-radius:4px; font-size:13px; }
-.action-item.done { text-decoration:line-through; opacity:0.5; }
-.action-meta { display:block; font-size:11px; color:#999; }
+.meeting {
+  display: flex;
+  flex-direction: column;
+  height: 100vh;
+  background: #1a1a1a;
+  color: #fff;
+}
+
+/* Top bar */
+.meeting-bar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 8px 16px;
+  background: #2a2a2a;
+  border-bottom: 1px solid #333;
+  flex-shrink: 0;
+  z-index: 10;
+}
+.bar-left, .bar-center, .bar-right {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.bar-left strong { font-size: 15px; }
+
+/* Body: PDF fills everything */
+.meeting-body {
+  flex: 1;
+  overflow: hidden;
+  position: relative;
+  background: #333;
+}
+
+.pdf-header {
+  position: absolute;
+  top: 0;
+  left: 0;
+  right: 0;
+  display: flex;
+  justify-content: space-between;
+  padding: 8px 16px;
+  background: rgba(0,0,0,0.7);
+  font-size: 14px;
+  z-index: 5;
+}
+
+.pdf-full {
+  width: 100%;
+  height: 100%;
+  border: none;
+}
+
+.no-pdf {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  height: 100%;
+  background: #1a1a1a;
+}
+
+/* Bottom bar */
+.meeting-footer {
+  display: flex;
+  justify-content: center;
+  gap: 24px;
+  padding: 4px 16px;
+  background: #2a2a2a;
+  font-size: 11px;
+  color: #666;
+  flex-shrink: 0;
+}
 </style>
