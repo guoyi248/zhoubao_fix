@@ -1,6 +1,6 @@
 <script setup lang="ts">
 /** 周报详情 + 附件 PDF 预览 — 成员和管理员共用 */
-import { ref, onMounted } from "vue";
+import { ref, onMounted, computed } from "vue";
 import api from "@/utils/api";
 
 const props = defineProps<{
@@ -52,6 +52,10 @@ function contentList(key: string): string[] {
   if (!report.value?.draft_content_json) return [];
   return report.value.draft_content_json[key] || [];
 }
+const hasContent = computed(() => {
+  const c = report.value?.draft_content_json;
+  return c && Object.values(c).some((v: any) => Array.isArray(v) ? v.length > 0 : !!v);
+});
 </script>
 
 <template>
