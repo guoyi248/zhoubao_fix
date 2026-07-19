@@ -20,7 +20,8 @@ urlpatterns = [
     path("<uuid:attachment_id>/confirm", views.confirm_preview, name="confirm-preview"),
     path("<uuid:attachment_id>/link-author-pdf", views.link_author_pdf, name="link-author-pdf"),
 
-    # 重试 + 删除
+    # 重试 + 删除 + 替换
     path("<uuid:attachment_id>/retry", views.retry_processing, name="retry"),
     path("<uuid:attachment_id>/delete", views.delete_attachment, name="delete"),
+    path("<uuid:attachment_id>/replace", views.replace_attachment, name="replace"),
 ]

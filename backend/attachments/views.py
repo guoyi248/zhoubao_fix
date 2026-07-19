@@ -71,6 +71,14 @@ def upload_attachment(request, report_id):
             status=status.HTTP_400_BAD_REQUEST,
         )
 
+    # ── 统一命名：hubu_W{iso_week}_{username}_{date}.{ext} ──
+    _, ext = os.path.splitext(uploaded_file.name)
+    from django.utils import timezone as tz
+    today = tz.now().date()
+    iso_week = report.reporting_period.iso_week
+    safe_name = f"hubu_W{iso_week:02d}_{request.user.username}_{today.strftime('%Y%m%d')}{ext}"
+    uploaded_file.name = safe_name
+
     # 检查附件数量
     current_count = Attachment.objects.filter(report=report).count()
     if current_count >= settings.MAX_ATTACHMENTS_PER_REPORT:
@@ -398,6 +406,78 @@ def delete_attachment(request, attachment_id):
 
     attachment.delete()
     return Response(status=status.HTTP_204_NO_CONTENT)
+
+
+@api_view(["POST"])
+@parser_classes([MultiPartParser])
+def replace_attachment(request, attachment_id):
+    """
+    POST /api/v1/attachments/{id}/replace
+    用新文件替换旧附件——删除旧的，上传新的。需用户确认。
+    """
+    old_attachment = _get_authorized_attachment(request, attachment_id, owner_only=True)
+
+    if old_attachment.report and old_attachment.report.status not in {ReportStatus.DRAFT, ReportStatus.RESUBMITTED}:
+        return Response(
+            {"code": "REPORT_LOCKED", "message": "周报已提交，无法替换附件"},
+            status=status.HTTP_409_CONFLICT,
+        )
+
+    uploaded_file = request.FILES.get("file")
+    if not uploaded_file:
+        return Response({"code": "NO_FILE", "message": "请选择文件"}, status=status.HTTP_400_BAD_REQUEST)
+
+    report = old_attachment.report
+
+    # 统一命名
+    _, ext = os.path.splitext(uploaded_file.name)
+    from django.utils import timezone as tz
+    today = tz.now().date()
+    iso_week = report.reporting_period.iso_week if report else 0
+    safe_name = f"hubu_W{iso_week:02d}_{request.user.username}_{today.strftime('%Y%m%d')}{ext}"
+    uploaded_file.name = safe_name
+
+    # 上传新文件
+    attachment_uuid = uuid.uuid4()
+    result = storage.upload_stream(
+        bucket=settings.S3_BUCKET_ORIGINALS,
+        object_key=f"originals/{attachment_uuid}/source",
+        file_obj=uploaded_file,
+    )
+
+    # MIME 检测
+    uploaded_file.seek(0)
+    mime_type = detect_mime(uploaded_file.read(4096), uploaded_file.name)
+    level = get_level(mime_type)
+
+    # 创建新附件
+    new_attachment = Attachment.objects.create(
+        report=report,
+        uploaded_by=request.user,
+        original_filename=safe_name,
+        safe_filename=f"{attachment_uuid}{ext}",
+        detected_mime=mime_type,
+        source_sha256=result["sha256"],
+        file_size_bytes=result["size"],
+        original_object_key=f"originals/{attachment_uuid}/source",
+        status=AttachmentStatus.QUARANTINED,
+    )
+
+    # 删旧
+    old_attachment.delete()
+
+    # 处理新附件
+    if level == "C":
+        new_attachment.status = AttachmentStatus.READY
+        new_attachment.save(update_fields=["status"])
+    elif is_pdf(mime_type):
+        new_attachment.status = AttachmentStatus.PREVIEW_READY
+        new_attachment.save(update_fields=["status"])
+    else:
+        new_attachment.status = AttachmentStatus.STORED
+        new_attachment.save(update_fields=["status"])
+
+    return Response(AttachmentDetailSerializer(new_attachment).data, status=status.HTTP_201_CREATED)
 
 
 # ═══════════════════════════════════════════════════════════════

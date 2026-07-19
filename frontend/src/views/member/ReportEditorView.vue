@@ -111,6 +111,27 @@ async function removeAttachment(att: AttInfo) {
   }
 }
 
+// 替换附件——上传新文件覆盖旧的
+async function replaceAttachment(att: AttInfo, file: any) {
+  await ElMessageBox.confirm(
+    `确认用 "${file.raw?.name || file.name}" 替换 "${att.original_filename}"？\n旧文件将被删除，此操作不可撤销。`,
+    "确认替换",
+    { type: "warning", confirmButtonText: "确认替换", cancelButtonText: "取消" },
+  );
+  try {
+    const form = new FormData();
+    form.append("file", file.raw || file);
+    const { data } = await api.post(`/attachments/${att.id}/replace`, form, {
+      headers: { "Content-Type": "multipart/form-data" },
+    });
+    const idx = attachments.value.findIndex((a) => a.id === att.id);
+    if (idx >= 0) attachments.value[idx] = data;
+    ElMessage.success(`已替换为 ${data.original_filename}`);
+  } catch (e: any) {
+    if (e !== "cancel") ElMessage.error(e.response?.data?.message || e.message || "替换失败");
+  }
+}
+
 // 提交周报
 async function handleSubmit() {
   if (!report.value || !canSubmit.value) return;
@@ -217,6 +238,12 @@ function canDelete(s: string) { return s !== "user_confirmed"; }
             <el-button size="small" text>下载原件</el-button>
           </a>
           <el-button v-if="canDelete(att.status)" size="small" text type="danger" @click="removeAttachment(att)">删除</el-button>
+          <!-- 替换按钮：隐藏的 file input -->
+          <label v-if="isEditable" style="cursor:pointer;font-size:12px;color:#409eff;margin-left:8px">
+            替换
+            <input type="file" hidden :accept="'.docx,.doc,.xlsx,.xls,.pptx,.ppt,.pdf,.txt,.md'"
+              @change="(e: any) => { if(e.target.files[0]) replaceAttachment(att, e.target.files[0]); e.target.value=''; }" />
+          </label>
         </div>
       </div>
     </el-card>
