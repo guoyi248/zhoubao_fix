@@ -46,7 +46,16 @@ function startPolling() {
 }
 
 async function loadAttachments(reportId: string) {
-  try { await api.get(`/me/reports/${reportId}`); } catch {}
+  try {
+    const { data } = await api.get(`/me/reports/${reportId}`);
+    if (data.revisions?.length) {
+      const rev = data.revisions[0];
+      if (rev.confirmed_pdf_attachment_id) {
+        const a = attachments.value.find(x => x.id === rev.confirmed_pdf_attachment_id);
+        if (!a) attachments.value.push({ id: rev.confirmed_pdf_attachment_id, status: "user_confirmed" });
+      }
+    }
+  } catch {}
 }
 
 async function handleUpload(file: any) {

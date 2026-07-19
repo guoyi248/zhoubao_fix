@@ -24,8 +24,8 @@ const deadlineText = computed(() => {
   return `${d.getMonth() + 1}月${d.getDate()}日 ${d.getHours()}:00 截止`;
 });
 const latestConfirmed = computed(() => {
-  const confirmed = attachments.value.filter(a => a.status === "user_confirmed");
-  return confirmed.length ? confirmed[confirmed.length - 1] : null;
+  const ok = attachments.value.filter(a => ["user_confirmed","preview_ready","ready","ready_with_warning"].includes(a.status));
+  return ok.length ? ok[ok.length - 1] : null;
 });
 
 onMounted(async () => {
