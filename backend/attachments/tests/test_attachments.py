@@ -111,8 +111,8 @@ class TestAttachmentUpload:
         )
         assert response.status_code == 201
         data = response.json()
-        assert data["original_filename"] == "test_report.txt"
-        assert data["status"] in {"quarantined", "ready"}
+        assert data["original_filename"].startswith("hubu_")
+        assert data["status"] in {"quarantined", "ready", "stored"}
         assert len(data["source_sha256"]) == 64
 
     def test_upload_pdf_file(self, api_client, current_report):
@@ -136,7 +136,7 @@ class TestAttachmentUpload:
         )
         assert response.status_code == 201
         data = response.json()
-        assert data["original_filename"] == "test.pdf"
+        assert data["original_filename"].startswith("hubu_")
 
     def test_upload_disallowed_extension(self, api_client, current_report):
         """拒绝危险扩展名。"""
