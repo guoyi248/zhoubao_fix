@@ -8,21 +8,20 @@ echo "  周报整合系统 — 部署"
 echo "  目录: $(pwd)"
 echo "========================================"
 
-# 1. 创建数据目录
-mkdir -p data/postgres data/clamav secrets
+# 1. 创建目录（compose 文件在 deploy/ 下，相对路径以 deploy/ 为准）
+mkdir -p data/postgres data/clamav deploy/secrets deploy/config
 
-# 2. 生成密钥（如果不存在）
-if [ ! -f secrets/django_secret_key ]; then
-  openssl rand -base64 48 | tr -d '\n' > secrets/django_secret_key
+# 2. 生成密钥
+if [ ! -f deploy/secrets/django_secret_key ]; then
+  openssl rand -base64 48 | tr -d '\n' > deploy/secrets/django_secret_key
 fi
-if [ ! -f secrets/postgres_password ]; then
-  openssl rand -base64 24 | tr -d '\n' > secrets/postgres_password
+if [ ! -f deploy/secrets/postgres_password ]; then
+  openssl rand -base64 24 | tr -d '\n' > deploy/secrets/postgres_password
 fi
-echo "hjy12345678" > secrets/s3_secret_key
-chmod 600 secrets/*
+echo "hjy12345678" > deploy/secrets/s3_secret_key
+chmod 600 deploy/secrets/*
 
-# 3. 环境变量（共用你已有的 Redis + MinIO）
-mkdir -p deploy/config
+# 3. 环境变量
 cat > deploy/config/app.env << 'EOF'
 DJANGO_SETTINGS_MODULE=config.settings.production
 DJANGO_ALLOWED_HOSTS=*
