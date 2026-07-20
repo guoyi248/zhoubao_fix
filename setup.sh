@@ -13,13 +13,11 @@ echo "  周报整合系统 一键部署"
 echo "  目录: $PROJECT_DIR"
 echo "========================================"
 
-# ── 0. 加速配置（国内服务器可选） ──
-# 取消下面注释启用国内镜像加速 Docker 和 pip
-# sudo mkdir -p /etc/docker
-# echo '{"registry-mirrors":["https://docker.1ms.run"]}' | sudo tee /etc/docker/daemon.json
-# sudo systemctl restart docker
-# PIP_MIRROR="https://pypi.tuna.tsinghua.edu.cn/simple"
-PIP_MIRROR=""
+# ── 0. 国内镜像加速 ──
+sudo mkdir -p /etc/docker
+echo '{"registry-mirrors":["https://docker.1ms.run"]}' | sudo tee /etc/docker/daemon.json
+sudo systemctl restart docker 2>/dev/null || true
+PIP_MIRROR="https://pypi.tuna.tsinghua.edu.cn/simple"
 
 # ── 1. 环境检测与安装 ──
 echo "检测环境..."
