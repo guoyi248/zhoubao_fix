@@ -64,34 +64,30 @@ DATABASE_PORT=5432
 DATABASE_NAME=weekly_report
 DATABASE_USER=weekly_app
 DATABASE_PASSWORD=$(cat deploy/secrets/postgres_password)
-REDIS_URL=redis://localhost:6379/0
-CELERY_RESULT_BACKEND=redis://localhost:6379/1
-S3_ENDPOINT=http://localhost:9100
+REDIS_URL=redis://redis:6379/0
+CELERY_RESULT_BACKEND=redis://redis:6379/1
+S3_ENDPOINT=http://minio:9000
 S3_ACCESS_KEY=hjy
 S3_SECRET_KEY=hjy12345678
 S3_BUCKET_ORIGINALS=weekly-originals
 S3_BUCKET_PREVIEWS=weekly-previews
 S3_BUCKET_EXPORTS=weekly-exports
-CLAMAV_HOST=localhost
+CLAMAV_HOST=clamav
 CLAMAV_PORT=3310
-GOTENBERG_URL=http://localhost:3000
+GOTENBERG_URL=http://gotenberg:3000
 MAX_UPLOAD_BYTES=104857600
 ENABLE_LLM=false
 EOF
 
 # ── 3. MinIO Buckets ──
 echo "MinIO Buckets..."
-if docker run --rm --network host --entrypoint sh minio/mc -c "
-  mc alias set local http://localhost:9100 hjy hjy12345678 &&
+docker run --rm --network weekly-report_backend --entrypoint sh minio/mc -c "
+  mc alias set local http://minio:9000 hjy hjy12345678 &&
   mc mb local/weekly-originals --ignore-existing &&
   mc mb local/weekly-previews --ignore-existing &&
   mc mb local/weekly-exports --ignore-existing &&
   echo '  Buckets OK'
-" 2>/dev/null; then
-  echo "  Buckets 就绪"
-else
-  echo "  Buckets 可能已存在"
-fi
+" 2>/dev/null || echo "  Buckets 可能已存在"
 
 # ── 4. 启动 Docker 服务 ──
 echo "启动 Docker 服务..."

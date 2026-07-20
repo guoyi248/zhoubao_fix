@@ -30,6 +30,8 @@ services:
   postgres:
     image: postgres:17-bookworm
     restart: unless-stopped
+    ports:
+      - "5432:5432"
     environment:
       POSTGRES_DB: weekly_report
       POSTGRES_USER: weekly_app
@@ -46,9 +48,41 @@ services:
       timeout: 5s
       retries: 10
 
+  redis:
+    image: redis:7-alpine
+    restart: unless-stopped
+    ports:
+      - "6379:6379"
+    command: redis-server --appendonly yes
+    volumes:
+      - ../data/redis:/data
+    networks:
+      - backend
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  minio:
+    image: minio/minio:latest
+    restart: unless-stopped
+    ports:
+      - "9100:9000"
+    command: server /data --console-address ":9001"
+    environment:
+      MINIO_ROOT_USER: hjy
+      MINIO_ROOT_PASSWORD: hjy12345678
+    volumes:
+      - ../data/minio:/data
+    networks:
+      - backend
+
   clamav:
     image: clamav/clamav:latest
     restart: unless-stopped
+    ports:
+      - "3310:3310"
     volumes:
       - ../data/clamav:/var/lib/clamav
     networks:
@@ -57,6 +91,8 @@ services:
   gotenberg:
     image: gotenberg/gotenberg:8
     restart: unless-stopped
+    ports:
+      - "3000:3000"
     networks:
       - backend
 
