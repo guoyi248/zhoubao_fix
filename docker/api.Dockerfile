@@ -17,8 +17,9 @@ RUN groupadd --gid 10001 app \
  && useradd --uid 10001 --gid app --create-home app
 
 WORKDIR /app
-COPY --chown=app:app backend/ /app/
-RUN pip install --no-cache-dir -e /app/..
+COPY pyproject.toml .
+COPY backend/ backend/
+RUN pip install --no-cache-dir -e .
 
 USER app
 EXPOSE 8000

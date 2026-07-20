@@ -22,6 +22,7 @@ echo "hjy12345678" > secrets/s3_secret_key
 chmod 600 secrets/*
 
 # 3. 环境变量（共用你已有的 Redis + MinIO）
+mkdir -p config
 cat > config/app.env << 'EOF'
 DJANGO_SETTINGS_MODULE=config.settings.production
 DJANGO_ALLOWED_HOSTS=*
@@ -45,8 +46,6 @@ GOTENBERG_URL=http://gotenberg:3000
 MAX_UPLOAD_BYTES=104857600
 ENABLE_LLM=false
 EOF
-
-mkdir -p config
 
 # 4. MinIO Buckets
 echo "创建 MinIO Buckets..."
