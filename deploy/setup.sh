@@ -59,7 +59,7 @@ sleep 10
 
 # ── 5. 安装 Python 依赖 ──
 echo "安装 Python 依赖..."
-pip install django djangorestframework django-cors-headers celery redis psycopg[binary] boto3 Pillow PyMuPDF argon2-cffi django-otp python-magic python-magic-bin requests fpdf2 python-docx openpyxl python-pptx gunicorn -q 2>&1 | tail -1
+pip install django djangorestframework django-cors-headers celery redis "psycopg[binary]" boto3 Pillow PyMuPDF argon2-cffi django-otp python-magic requests fpdf2 python-docx openpyxl python-pptx gunicorn -q 2>&1 | tail -3
 
 # ── 6. 数据库迁移 ──
 echo "数据库迁移..."
@@ -88,6 +88,7 @@ docker compose -f deploy/compose.yaml -f deploy/compose.production.yaml up -d
 
 # ── 9. 启动 Django ──
 echo "启动 Django..."
+set -a; source deploy/config/app.env; set +a
 nohup gunicorn config.wsgi:application --bind 0.0.0.0:8000 --chdir backend --workers 2 --threads 2 --access-logfile /tmp/gunicorn.log --error-logfile /tmp/gunicorn-error.log > /dev/null 2>&1 &
 echo "Django PID: $!"
 
