@@ -22,8 +22,8 @@ echo "hjy12345678" > secrets/s3_secret_key
 chmod 600 secrets/*
 
 # 3. 环境变量（共用你已有的 Redis + MinIO）
-mkdir -p config
-cat > config/app.env << 'EOF'
+mkdir -p deploy/config
+cat > deploy/config/app.env << 'EOF'
 DJANGO_SETTINGS_MODULE=config.settings.production
 DJANGO_ALLOWED_HOSTS=*
 CSRF_TRUSTED_ORIGINS=http://*
@@ -59,18 +59,15 @@ docker run --rm --network host --entrypoint sh minio/mc -c "
 
 # 5. 启动数据库和依赖
 echo "启动服务..."
-cp "$SCRIPT_DIR/compose.yaml" . 2>/dev/null
-cp "$SCRIPT_DIR/compose.production.yaml" . 2>/dev/null
-cp "$SCRIPT_DIR/nginx.conf" . 2>/dev/null
-docker compose -f compose.yaml -f compose.production.yaml up -d postgres clamav gotenberg
+docker compose -f deploy/compose.yaml -f deploy/compose.production.yaml up -d postgres clamav gotenberg
 echo "等待 PostgreSQL..."
 sleep 15
 
 # 6. 数据库迁移
-docker compose -f compose.yaml -f compose.production.yaml run --rm api python manage.py migrate --noinput
+docker compose -f deploy/compose.yaml -f deploy/compose.production.yaml run --rm api python manage.py migrate --noinput
 
 # 7. 创建管理员
-docker compose -f compose.yaml -f compose.production.yaml run --rm api python manage.py shell -c "
+docker compose -f deploy/compose.yaml -f deploy/compose.production.yaml run --rm api python manage.py shell -c "
 from accounts.models import User, UserRole, AccountStatus
 from organizations.models import Department
 dept, _ = Department.objects.get_or_create(name='技术部', defaults={'code':'tech'})
@@ -82,7 +79,7 @@ else:
 "
 
 # 8. 启动全部
-docker compose -f compose.yaml -f compose.production.yaml up -d
+docker compose -f deploy/compose.yaml -f deploy/compose.production.yaml up -d
 
 echo ""
 echo "========================================"
