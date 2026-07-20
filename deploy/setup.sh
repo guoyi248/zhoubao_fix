@@ -26,7 +26,7 @@ mkdir -p config
 cat > config/app.env << 'EOF'
 DJANGO_SETTINGS_MODULE=config.settings.production
 DJANGO_ALLOWED_HOSTS=*
-CSRF_TRUSTED_ORIGINS=http://localhost:9527
+CSRF_TRUSTED_ORIGINS=http://*
 APP_TIME_ZONE=Asia/Shanghai
 DATABASE_HOST=postgres
 DATABASE_PORT=5432
