@@ -13,39 +13,60 @@ echo "  周报整合系统 一键部署"
 echo "  目录: $PROJECT_DIR"
 echo "========================================"
 
-# ── 0. 环境检测 ──
+# ── 0. 环境检测与安装 ──
 echo "检测环境..."
 
-# Python
-if command -v python3 &>/dev/null; then
-  PYTHON=python3
-elif command -v python &>/dev/null; then
-  PYTHON=python
-else
-  echo "ERROR: 未找到 Python，请先安装 Python 3.11+"
-  echo "  sudo apt update && sudo apt install -y python3 python3-pip"
-  exit 1
+# 更新 apt
+sudo apt update -qq
+
+# Python3 + pip
+if ! command -v python3 &>/dev/null; then
+  echo "安装 Python3..."
+  sudo apt install -y -qq python3 python3-pip
 fi
+PYTHON=python3
 echo "  Python: $($PYTHON --version)"
 
-# pip
 if ! $PYTHON -m pip --version &>/dev/null; then
-  echo "安装 pip..."
-  sudo apt update -qq && sudo apt install -y -qq python3-pip
+  sudo apt install -y -qq python3-pip
 fi
+echo "  pip: OK"
+
+# Git
+if ! command -v git &>/dev/null; then
+  echo "安装 Git..."
+  sudo apt install -y -qq git
+fi
+echo "  Git: $(git --version)"
 
 # Docker
+if ! command -v docker &>/dev/null; then
+  echo "安装 Docker..."
+  sudo apt install -y -qq docker.io docker-compose-v2
+  sudo systemctl enable --now docker
+fi
 if ! docker info &>/dev/null; then
-  echo "ERROR: Docker 未运行。安装 Docker:"
-  echo "  curl -fsSL https://get.docker.com | sudo sh"
-  echo "  sudo usermod -aG docker \$USER && newgrp docker"
-  exit 1
+  echo "启动 Docker..."
+  sudo systemctl start docker
+  sleep 3
 fi
 echo "  Docker: $(docker --version)"
 
 # openssl
 if ! command -v openssl &>/dev/null; then
   sudo apt install -y -qq openssl
+fi
+
+# 确保 docker 命令可用
+if docker info &>/dev/null; then
+  DOCKER="docker"
+elif sudo docker info &>/dev/null; then
+  DOCKER="sudo docker"
+  sudo usermod -aG docker $USER 2>/dev/null || true
+  echo "  提示: 已加入 docker 组，下次登录后无需 sudo"
+else
+  echo "ERROR: Docker 无法连接"
+  exit 1
 fi
 
 # ── 1. 创建目录和密钥 ──
@@ -90,27 +111,27 @@ ENABLE_LLM=false
 EOF
 
 # ── 3. 判断是否复用已有 MinIO / Redis ──
-if docker ps --format '{{.Names}}' | grep -q "update-url-minio"; then
+if $DOCKER ps --format '{{.Names}}' | grep -q "update-url-minio"; then
   echo "复用已有 MinIO"
 else
   echo "创建 MinIO..."
-  docker compose -f deploy/compose.yaml -f deploy/compose.production.yaml up -d minio
+  $DOCKER compose -f deploy/compose.yaml -f deploy/compose.production.yaml up -d minio
 fi
 
-if docker ps --format '{{.Names}}' | grep -q "geotrellis-redis"; then
+if $DOCKER ps --format '{{.Names}}' | grep -q "geotrellis-redis"; then
   echo "复用已有 Redis"
 else
   echo "创建 Redis..."
-  docker compose -f deploy/compose.yaml -f deploy/compose.production.yaml up -d redis
+  $DOCKER compose -f deploy/compose.yaml -f deploy/compose.production.yaml up -d redis
 fi
 
 # ── 4. 启动 Docker 服务 ──
 echo "启动服务..."
-docker compose -f deploy/compose.yaml -f deploy/compose.production.yaml up -d postgres clamav gotenberg
+$DOCKER compose -f deploy/compose.yaml -f deploy/compose.production.yaml up -d postgres clamav gotenberg
 
 echo "等待 PostgreSQL..."
 for i in $(seq 1 20); do
-  if docker compose -f deploy/compose.yaml -f deploy/compose.production.yaml exec -T postgres pg_isready -U weekly_app 2>/dev/null; then
+  if $DOCKER compose -f deploy/compose.yaml -f deploy/compose.production.yaml exec -T postgres pg_isready -U weekly_app 2>/dev/null; then
     echo "  PostgreSQL 就绪"
     break
   fi
@@ -119,7 +140,7 @@ done
 
 # ── 5. MinIO Buckets ──
 echo "MinIO Buckets..."
-docker run --rm --network host --entrypoint sh minio/mc -c "
+$DOCKER run --rm --network host --entrypoint sh minio/mc -c "
   mc alias set local http://localhost:9100 hjy hjy12345678 &&
   mc mb local/weekly-originals --ignore-existing &&
   mc mb local/weekly-previews --ignore-existing &&
@@ -158,7 +179,7 @@ else:
 "
 
 # ── 9. 启动 Nginx ──
-docker compose -f deploy/compose.yaml -f deploy/compose.production.yaml up -d nginx 2>&1 | tail -1
+$DOCKER compose -f deploy/compose.yaml -f deploy/compose.production.yaml up -d nginx 2>&1 | tail -1
 
 # ── 10. 启动 Django ──
 echo "启动 Django..."
