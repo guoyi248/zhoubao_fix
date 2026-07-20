@@ -13,7 +13,15 @@ echo "  周报整合系统 一键部署"
 echo "  目录: $PROJECT_DIR"
 echo "========================================"
 
-# ── 0. 环境检测与安装 ──
+# ── 0. 加速配置（国内服务器可选） ──
+# 取消下面注释启用国内镜像加速 Docker 和 pip
+# sudo mkdir -p /etc/docker
+# echo '{"registry-mirrors":["https://docker.1ms.run"]}' | sudo tee /etc/docker/daemon.json
+# sudo systemctl restart docker
+# PIP_MIRROR="https://pypi.tuna.tsinghua.edu.cn/simple"
+PIP_MIRROR=""
+
+# ── 1. 环境检测与安装 ──
 echo "检测环境..."
 
 # 更新 apt
@@ -32,6 +40,11 @@ if ! $PYTHON -m pip --version &>/dev/null; then
 fi
 echo "  pip: OK"
 
+# curl（Docker 官方安装脚本需要）
+if ! command -v curl &>/dev/null; then
+  sudo apt install -y -qq curl
+fi
+
 # Git
 if ! command -v git &>/dev/null; then
   echo "安装 Git..."
@@ -39,10 +52,10 @@ if ! command -v git &>/dev/null; then
 fi
 echo "  Git: $(git --version)"
 
-# Docker
+# Docker（使用官方安装脚本，兼容所有 Debian 版本）
 if ! command -v docker &>/dev/null; then
   echo "安装 Docker..."
-  sudo apt install -y -qq docker.io docker-compose-v2
+  curl -fsSL https://get.docker.com | sudo sh
   sudo systemctl enable --now docker
 fi
 if ! docker info &>/dev/null; then
@@ -51,6 +64,11 @@ if ! docker info &>/dev/null; then
   sleep 3
 fi
 echo "  Docker: $(docker --version)"
+# 确保 compose 插件可用
+if ! docker compose version &>/dev/null; then
+  echo "ERROR: Docker Compose 插件未安装"
+  exit 1
+fi
 
 # openssl
 if ! command -v openssl &>/dev/null; then
@@ -150,7 +168,10 @@ $DOCKER run --rm --network host --entrypoint sh minio/mc -c "
 
 # ── 6. 安装 Python 依赖 ──
 echo "安装 Python 依赖..."
-$PYTHON -m pip install --quiet \
+if [ -n "$PIP_MIRROR" ]; then
+  PIP_OPTS="-i $PIP_MIRROR"
+fi
+$PYTHON -m pip install --quiet $PIP_OPTS \
   django djangorestframework django-cors-headers \
   celery redis "psycopg[binary]" boto3 Pillow PyMuPDF \
   argon2-cffi django-otp python-magic requests \
