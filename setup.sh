@@ -166,13 +166,19 @@ $DOCKER run --rm --network host --entrypoint sh minio/mc -c "
   echo '  Buckets OK'
 " 2>/dev/null || echo "  已存在"
 
-# ── 6. 安装 Python 依赖 ──
+# ── 6. 创建虚拟环境并安装依赖 ──
 echo "安装 Python 依赖..."
 if [ -n "$PIP_MIRROR" ]; then
   PIP_OPTS="-i $PIP_MIRROR"
 fi
-$PYTHON -m pip install --quiet $PIP_OPTS \
-  django djangorestframework django-cors-headers \
+# 创建 venv（如不存在）
+if [ ! -f venv/bin/python ]; then
+  $PYTHON -m venv venv
+fi
+VENV_PIP="venv/bin/pip"
+VENV_PY="venv/bin/python"
+$VENV_PIP install --quiet $PIP_OPTS \
+  django djangorestframework django-cors-headers django-extensions \
   celery redis "psycopg[binary]" boto3 Pillow PyMuPDF \
   argon2-cffi django-otp python-magic requests \
   fpdf2 python-docx openpyxl python-pptx gunicorn \
@@ -184,11 +190,11 @@ echo "数据库迁移..."
 export DJANGO_SETTINGS_MODULE=config.settings.production
 export DATABASE_HOST=localhost DATABASE_PORT=5432 DATABASE_NAME=weekly_report DATABASE_USER=weekly_app
 export DATABASE_PASSWORD=$PG_PASS
-$PYTHON backend/manage.py migrate --noinput 2>&1 | tail -1
+$VENV_PY backend/manage.py migrate --noinput 2>&1 | tail -1
 
 # ── 8. 管理员 ──
 echo "创建管理员..."
-$PYTHON backend/manage.py shell -c "
+$VENV_PY backend/manage.py shell -c "
 from accounts.models import User, UserRole, AccountStatus
 from organizations.models import Department
 dept, _ = Department.objects.get_or_create(name='技术部', defaults={'code':'tech'})
@@ -202,11 +208,11 @@ else:
 # ── 9. 启动 Nginx ──
 $DOCKER compose -f deploy/compose.yaml -f deploy/compose.production.yaml up -d nginx 2>&1 | tail -1
 
-# ── 10. 启动 Django ──
+# ── 10. 启动 Django（生产模式） ──
 echo "启动 Django..."
 set -a; source deploy/config/app.env; set +a
 pkill -f "gunicorn.*config.wsgi" 2>/dev/null || true
-nohup $PYTHON -m gunicorn config.wsgi:application \
+nohup $VENV_PY -m gunicorn config.wsgi:application \
   --bind 0.0.0.0:8000 --chdir backend \
   --workers 2 --threads 2 \
   --access-logfile /tmp/gunicorn-access.log \
