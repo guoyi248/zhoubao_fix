@@ -3,6 +3,8 @@
 记录所有高风险操作：登录、权限变更、文件下载、组会、导出等。
 """
 
+import uuid
+
 from django.conf import settings
 from django.db import models
 
@@ -35,7 +37,7 @@ class AuditEvent(models.Model):
         EMERGENCY_ACCOUNT_ENABLED = "EMERGENCY_ACCOUNT_ENABLED", "应急账号启用"
 
     # 事件元数据
-    event_id = models.UUIDField("事件 ID", auto_created=True, primary_key=True, editable=False)
+    event_id = models.UUIDField("事件 ID", primary_key=True, default=uuid.uuid4, editable=False)
     event_type = models.CharField("事件类型", max_length=50, choices=EventType.choices)
     created_at = models.DateTimeField("时间", auto_now_add=True, db_index=True)
 
