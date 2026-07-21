@@ -9,7 +9,6 @@ services:
     environment:
       POSTGRES_DB: weekly_report
       POSTGRES_USER: weekly_app
-      POSTGRES_PASSWORD: dev_password
     ports:
       - "5432:5432"
     volumes:
