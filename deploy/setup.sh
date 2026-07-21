@@ -172,8 +172,12 @@ else:
 echo ""
 
 echo "========================================"
-echo "  [9/9] 启动 Nginx"
+echo "  [9/9] 构建并启动 Nginx（首次编译前端约需 3-5 分钟）"
 echo "========================================"
+echo "构建 Nginx 镜像（含 Vue 前端编译）..."
+docker compose -f deploy/compose.yaml -f deploy/compose.production.yaml build nginx
+echo "  ✓ Nginx 镜像构建完成"
+echo "启动 Nginx 容器..."
 docker compose -f deploy/compose.yaml -f deploy/compose.production.yaml up -d nginx
 echo "  ✓ Nginx 已启动"
 
