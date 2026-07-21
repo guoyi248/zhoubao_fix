@@ -62,6 +62,21 @@ async function resetPassword(user: User) {
     ElMessage.success("密码已重置");
   }
 }
+
+async function deleteUser(user: User) {
+  try {
+    await ElMessageBox.confirm(
+      `确定删除成员「${user.display_name}（${user.username}）」吗？此操作不可撤销。`,
+      "删除确认",
+      { confirmButtonText: "确认删除", cancelButtonText: "取消", type: "warning" }
+    );
+    await api.delete(`/admin/users/${user.id}/delete`);
+    await loadUsers();
+    ElMessage.success("已删除");
+  } catch (e: any) {
+    if (e !== "cancel") ElMessage.error(e.message || "删除失败");
+  }
+}
 </script>
 
 <template>
@@ -108,6 +123,7 @@ async function resetPassword(user: User) {
             {{ row.account_status === 'active' ? '禁用' : '恢复' }}
           </el-button>
           <el-button text size="small" @click="resetPassword(row)">重置密码</el-button>
+          <el-button text size="small" type="danger" @click="deleteUser(row)">删除</el-button>
         </template>
       </el-table-column>
     </el-table>

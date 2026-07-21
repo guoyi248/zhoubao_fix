@@ -287,3 +287,21 @@ def admin_reset_password(request, user_id):
     SessionRevocation.objects.create(user=target, reason=f"密码由 {request.user.username} 重置")
 
     return Response({"detail": "密码已重置，账号已激活"})
+
+
+@api_view(["DELETE"])
+def admin_delete_user(request, user_id):
+    """DELETE /api/v1/admin/users/{id} —— 管理员删除成员。"""
+    _require_admin(request.user)
+    try:
+        target = User.objects.get(id=user_id)
+    except User.DoesNotExist:
+        raise ObjectNotFound()
+
+    if target.id == request.user.id:
+        raise PermissionDeniedError(detail="不能删除自己")
+    if target.is_super_admin and not request.user.is_super_admin:
+        raise PermissionDeniedError(detail="只有超级管理员可以删除超级管理员")
+
+    target.delete()
+    return Response({"detail": "账号已删除"})
