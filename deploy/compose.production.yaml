@@ -99,7 +99,6 @@ services:
 networks:
   frontend:
   backend:
-    internal: true
 
 secrets:
   postgres_password:

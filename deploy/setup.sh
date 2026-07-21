@@ -61,7 +61,7 @@ DJANGO_ALLOWED_HOSTS=*
 DJANGO_SECRET_KEY=$(cat deploy/secrets/django_secret_key)
 DJANGO_CSRF_TRUSTED_ORIGINS=http://localhost:9527,http://127.0.0.1:9527
 APP_TIME_ZONE=Asia/Shanghai
-DATABASE_HOST=localhost
+DATABASE_HOST=127.0.0.1
 DATABASE_PORT=5432
 DATABASE_NAME=weekly_report
 DATABASE_USER=weekly_app
@@ -116,7 +116,7 @@ echo "  依赖安装完成"
 # ── 6. 数据库迁移 ──
 echo "数据库迁移..."
 export DJANGO_SETTINGS_MODULE=config.settings.production
-export DATABASE_HOST=localhost DATABASE_PORT=5432 DATABASE_NAME=weekly_report DATABASE_USER=weekly_app
+export DATABASE_HOST=127.0.0.1 DATABASE_PORT=5432 DATABASE_NAME=weekly_report DATABASE_USER=weekly_app
 export DATABASE_PASSWORD=$(cat deploy/secrets/postgres_password)
 $PYTHON backend/manage.py migrate --noinput 2>&1 | tail -3
 
