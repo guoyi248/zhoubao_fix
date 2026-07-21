@@ -43,6 +43,21 @@ if ! command -v openssl &>/dev/null; then
   sudo apt install -y -qq openssl
 fi
 
+# ── 0.5 检测服务器 IP ──
+echo "检测服务器 IP..."
+LOCAL_IPS=$(hostname -I 2>/dev/null | tr ' ' '\n' | grep -v '^$' || true)
+PUBLIC_IP=$(curl -s --connect-timeout 3 ifconfig.me 2>/dev/null || curl -s --connect-timeout 3 icanhazip.com 2>/dev/null || true)
+
+# 构建 CSRF_TRUSTED_ORIGINS
+CSRF_ORIGINS="http://localhost:9527,http://127.0.0.1:9527"
+for ip in $LOCAL_IPS; do
+  CSRF_ORIGINS="$CSRF_ORIGINS,http://$ip:9527"
+done
+if [ -n "$PUBLIC_IP" ]; then
+  CSRF_ORIGINS="$CSRF_ORIGINS,http://$PUBLIC_IP:9527"
+fi
+echo "  CSRF Origins: $CSRF_ORIGINS"
+
 # ── 1. 创建目录和密钥 ──
 mkdir -p data/postgres data/clamav deploy/secrets deploy/config
 
@@ -59,7 +74,7 @@ cat > deploy/config/app.env << EOF
 DJANGO_SETTINGS_MODULE=config.settings.production
 DJANGO_ALLOWED_HOSTS=*
 DJANGO_SECRET_KEY=$(cat deploy/secrets/django_secret_key)
-DJANGO_CSRF_TRUSTED_ORIGINS=http://localhost:9527,http://127.0.0.1:9527
+DJANGO_CSRF_TRUSTED_ORIGINS=$CSRF_ORIGINS
 APP_TIME_ZONE=Asia/Shanghai
 DATABASE_HOST=127.0.0.1
 DATABASE_PORT=5432
@@ -148,10 +163,13 @@ nohup $PYTHON -m gunicorn config.wsgi:application \
   > /dev/null 2>&1 &
 echo "  Django PID: $!"
 
-IP=$(hostname -I 2>/dev/null | awk '{print $1}')
+# 取第一个 IP 用于显示
+ACCESS_IP=$(echo "$LOCAL_IPS" | head -1)
+[ -z "$ACCESS_IP" ] && ACCESS_IP="$PUBLIC_IP"
 echo ""
 echo "========================================"
 echo "  ✅ 部署完成!"
-echo "  访问: http://$IP:9527"
+echo "  访问: http://$ACCESS_IP:9527"
+[ -n "$PUBLIC_IP" ] && echo "  公网: http://$PUBLIC_IP:9527"
 echo "  管理员: admin / Admin123!"
 echo "========================================"
