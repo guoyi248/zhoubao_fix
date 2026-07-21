@@ -28,6 +28,7 @@ from .serializers import (
     UpdateUserSerializer,
     ResetPasswordSerializer,
 )
+from audit.models import AuditEvent
 from common.exceptions import (
     InvalidCredentialsError,
     AccountDisabledError,
@@ -50,10 +51,23 @@ def login_view(request):
 
     user = authenticate(request, username=data["username"], password=data["password"])
     if user is None:
+        AuditEvent.objects.create(
+            event_type=AuditEvent.EventType.LOGIN_FAILURE,
+            actor_ip=request.META.get("REMOTE_ADDR", ""),
+            summary=f"登录失败: {data['username']}",
+            result="failure",
+        )
         raise InvalidCredentialsError()
 
     if user.account_status != AccountStatus.ACTIVE:
         raise AccountDisabledError()
+
+    AuditEvent.objects.create(
+        event_type=AuditEvent.EventType.LOGIN_SUCCESS,
+        actor=user,
+        actor_ip=request.META.get("REMOTE_ADDR", ""),
+        result="success",
+    )
 
     # TOTP 校验（如已启用）
     if user.totp_enabled and not data.get("totp_code"):
@@ -174,6 +188,16 @@ def admin_create_user(request):
     )
     user.set_unusable_password()
 
+    AuditEvent.objects.create(
+        event_type=AuditEvent.EventType.USER_CREATED,
+        actor=request.user,
+        actor_ip=request.META.get("REMOTE_ADDR", ""),
+        target_type="user",
+        target_id=str(user.id),
+        summary=f"创建用户: {user.display_name} ({user.username})",
+        result="success",
+    )
+
     return Response(
         {
             "id": str(user.id),
@@ -247,6 +271,15 @@ def admin_disable_user(request, user_id):
         raise PermissionDeniedError(detail="不能禁用超级管理员")
 
     target.disable()
+    AuditEvent.objects.create(
+        event_type=AuditEvent.EventType.USER_DISABLED,
+        actor=request.user,
+        actor_ip=request.META.get("REMOTE_ADDR", ""),
+        target_type="user",
+        target_id=str(target.id),
+        summary=f"禁用用户: {target.display_name} ({target.username})",
+        result="success",
+    )
     return Response({"detail": "账号已禁用"})
 
 
@@ -259,6 +292,15 @@ def admin_enable_user(request, user_id):
     except User.DoesNotExist:
         raise ObjectNotFound()
     target.enable()
+    AuditEvent.objects.create(
+        event_type=AuditEvent.EventType.USER_ENABLED,
+        actor=request.user,
+        actor_ip=request.META.get("REMOTE_ADDR", ""),
+        target_type="user",
+        target_id=str(target.id),
+        summary=f"恢复用户: {target.display_name} ({target.username})",
+        result="success",
+    )
     return Response({"detail": "账号已恢复"})
 
 
@@ -286,6 +328,16 @@ def admin_reset_password(request, user_id):
     target.save(update_fields=["password", "password_changed_at", "account_status", "activation_token", "activation_token_expires_at"])
     SessionRevocation.objects.create(user=target, reason=f"密码由 {request.user.username} 重置")
 
+    AuditEvent.objects.create(
+        event_type="PASSWORD_RESET",
+        actor=request.user,
+        actor_ip=request.META.get("REMOTE_ADDR", ""),
+        target_type="user",
+        target_id=str(target.id),
+        summary=f"密码重置: {target.display_name} ({target.username})",
+        result="success",
+    )
+
     return Response({"detail": "密码已重置，账号已激活"})
 
 
@@ -303,5 +355,14 @@ def admin_delete_user(request, user_id):
     if target.is_super_admin and not request.user.is_super_admin:
         raise PermissionDeniedError(detail="只有超级管理员可以删除超级管理员")
 
+    audit_summary = f"删除用户: {target.display_name} ({target.username})"
     target.delete()
+    AuditEvent.objects.create(
+        event_type="USER_DELETED",
+        actor=request.user,
+        actor_ip=request.META.get("REMOTE_ADDR", ""),
+        summary=audit_summary,
+        result="success",
+        risk_level="high",
+    )
     return Response({"detail": "账号已删除"})
