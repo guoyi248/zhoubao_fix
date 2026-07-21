@@ -51,8 +51,8 @@ INSTALLED_APPS = INSTALLED_APPS + [  # noqa: F405
 ]
 
 # Celery：优先读环境变量中的 Redis URL；开发模式同步执行
-CELERY_BROKER_URL = os.environ.get("REDIS_URL", "redis://localhost:6379/0")
-CELERY_RESULT_BACKEND = os.environ.get("CELERY_RESULT_BACKEND", "redis://localhost:6379/1")
+CELERY_BROKER_URL = os.environ.get("REDIS_URL", "memory://")
+CELERY_RESULT_BACKEND = os.environ.get("CELERY_RESULT_BACKEND", "cache+memory://")
 CELERY_TASK_ALWAYS_EAGER = True  # 开发模式：.delay() 直接同步执行，不依赖 Worker
 
 # 本地存储回退（Docker/MinIO 不可用时）

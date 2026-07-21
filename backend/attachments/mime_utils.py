@@ -5,12 +5,15 @@ MIME 类型检测与文件格式分类。
 
 import os
 import mimetypes
+import sys as _sys
 
-try:
-    import magic
-    _has_libmagic = True
-except ImportError:
-    _has_libmagic = False
+_has_libmagic = False
+if _sys.platform != "win32":
+    try:
+        import magic
+        _has_libmagic = True
+    except ImportError:
+        pass
 
 # 文件支持等级
 SUPPORTED_MIME_LEVEL_A = {
