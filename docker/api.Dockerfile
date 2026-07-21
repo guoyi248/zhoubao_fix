@@ -17,9 +17,10 @@ RUN groupadd --gid 10001 app \
  && useradd --uid 10001 --gid app --create-home app
 
 WORKDIR /app
+ARG PIP_INDEX_URL=https://pypi.tuna.tsinghua.edu.cn/simple
 COPY pyproject.toml .
 COPY backend/ backend/
-RUN pip install --no-cache-dir -e .
+RUN pip install --no-cache-dir -i $PIP_INDEX_URL -e .
 
 USER app
 EXPOSE 8000

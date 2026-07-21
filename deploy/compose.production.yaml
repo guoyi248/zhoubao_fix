@@ -20,6 +20,8 @@ services:
     build:
       context: ..
       dockerfile: docker/api.Dockerfile
+      args:
+        PIP_INDEX_URL: https://pypi.tuna.tsinghua.edu.cn/simple
     restart: unless-stopped
     env_file:
       - ./config/app.env
