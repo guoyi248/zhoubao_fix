@@ -5,7 +5,7 @@ COPY frontend/package.json frontend/package-lock.json* ./
 RUN npm config set registry https://registry.npmmirror.com \
  && npm install
 COPY frontend/ ./
-RUN npm run build
+RUN npx vite build
 
 FROM nginx:stable-alpine
 COPY deploy/nginx.conf /etc/nginx/conf.d/default.conf
