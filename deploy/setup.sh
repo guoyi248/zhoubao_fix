@@ -94,7 +94,7 @@ echo "启动 Docker 服务..."
 docker compose -f deploy/compose.yaml -f deploy/compose.production.yaml up -d postgres clamav gotenberg 2>&1 | tail -3
 echo "等待 PostgreSQL..."
 for i in $(seq 1 20); do
-  if docker compose -f deploy/compose.yaml -f deploy/compose.production.yaml exec -T postgres pg_isready -U weekly_app 2>/dev/null; then
+  if docker compose -f deploy/compose.yaml -f deploy/compose.production.yaml exec -T postgres pg_isready -U weekly_app -d weekly_report 2>/dev/null; then
     echo "  PostgreSQL 就绪"
     break
   fi
