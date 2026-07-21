@@ -143,7 +143,7 @@ USE_TZ = True
 
 # ── 静态文件 ──────────────────────────────────────────────
 
-STATIC_URL = "/assets/"
+STATIC_URL = "/static/"
 STATIC_ROOT = BASE_DIR / "staticfiles"
 
 # ── 文件上传 ──────────────────────────────────────────────

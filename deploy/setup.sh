@@ -155,6 +155,10 @@ echo "========================================"
 docker compose -f deploy/compose.yaml -f deploy/compose.production.yaml run --rm api python backend/manage.py migrate --noinput
 echo "  ✓ 迁移完成"
 echo ""
+echo "收集静态文件..."
+docker compose -f deploy/compose.yaml -f deploy/compose.production.yaml run --rm api python backend/manage.py collectstatic --noinput 2>&1 | tail -3
+echo "  ✓ 静态文件收集完成"
+echo ""
 
 echo "========================================"
 echo "  [8/9] 创建管理员"
