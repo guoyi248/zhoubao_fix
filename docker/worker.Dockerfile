@@ -8,7 +8,8 @@ ENV LANG=C.UTF-8 \
     PYTHONUNBUFFERED=1
 
 # bookworm-backports 提供 LibreOffice 25.2 系列
-RUN echo "deb http://deb.debian.org/debian bookworm-backports main" \
+RUN sed -i 's/deb.debian.org/mirrors.tuna.tsinghua.edu.cn/g' /etc/apt/sources.list.d/debian.sources \
+ && echo "deb http://mirrors.tuna.tsinghua.edu.cn/debian bookworm-backports main" \
       > /etc/apt/sources.list.d/bookworm-backports.list \
  && apt-get update \
  && apt-get install -y --no-install-recommends \
