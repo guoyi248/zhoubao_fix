@@ -76,7 +76,7 @@ DJANGO_ALLOWED_HOSTS=*
 DJANGO_SECRET_KEY=$(cat deploy/secrets/django_secret_key)
 DJANGO_CSRF_TRUSTED_ORIGINS=$CSRF_ORIGINS
 APP_TIME_ZONE=Asia/Shanghai
-DATABASE_HOST=127.0.0.1
+DATABASE_HOST=postgres
 DATABASE_PORT=5432
 DATABASE_NAME=weekly_report
 DATABASE_USER=weekly_app
@@ -108,7 +108,7 @@ docker run --rm --network weekly-report_backend --entrypoint sh minio/mc -c "
 
 # ── 4. 启动 Docker 服务 ──
 echo "启动 Docker 服务..."
-docker compose -f deploy/compose.yaml -f deploy/compose.production.yaml up -d postgres clamav gotenberg 2>&1 | tail -3
+docker compose -f deploy/compose.yaml -f deploy/compose.production.yaml up -d postgres redis minio clamav gotenberg 2>&1 | tail -3
 echo "等待 PostgreSQL..."
 for i in $(seq 1 20); do
   if docker compose -f deploy/compose.yaml -f deploy/compose.production.yaml exec -T postgres pg_isready -U weekly_app -d weekly_report 2>/dev/null; then
@@ -128,15 +128,18 @@ $PYTHON -m pip install --quiet \
   2>&1 | tail -1
 echo "  依赖安装完成"
 
-# ── 6. 数据库迁移 ──
-echo "数据库迁移..."
-export DJANGO_SETTINGS_MODULE=config.settings.production
-export DATABASE_HOST=127.0.0.1 DATABASE_PORT=5432 DATABASE_NAME=weekly_report DATABASE_USER=weekly_app
-export DATABASE_PASSWORD=$(cat deploy/secrets/postgres_password)
-$PYTHON backend/manage.py migrate --noinput 2>&1 | tail -3
+# ── 6. 构建并启动 API 容器 ──
+echo "构建 API 镜像..."
+docker compose -f deploy/compose.yaml -f deploy/compose.production.yaml build api 2>&1 | tail -3
+echo "启动 API 容器..."
+docker compose -f deploy/compose.yaml -f deploy/compose.production.yaml up -d api 2>&1 | tail -2
 
-# ── 7. 管理员 ──
-$PYTHON backend/manage.py shell -c "
+# ── 7. 数据库迁移 ──
+echo "数据库迁移..."
+docker compose -f deploy/compose.yaml -f deploy/compose.production.yaml run --rm api python backend/manage.py migrate --noinput 2>&1 | tail -5
+
+# ── 8. 管理员 ──
+docker compose -f deploy/compose.yaml -f deploy/compose.production.yaml run --rm api python backend/manage.py shell -c "
 from accounts.models import User, UserRole, AccountStatus
 from organizations.models import Department
 dept, _ = Department.objects.get_or_create(name='技术部', defaults={'code':'tech'})
@@ -145,23 +148,10 @@ if not User.objects.filter(username='admin').exists():
     print('  Admin 已创建: admin / Admin123!')
 else:
     print('  Admin 已存在')
-"
+" 2>&1 | grep -E 'Admin|Error|Traceback'
 
-# ── 8. 启动 Nginx ──
+# ── 9. 启动 Nginx ──
 docker compose -f deploy/compose.yaml -f deploy/compose.production.yaml up -d nginx 2>&1 | tail -2
-
-# ── 9. 启动 Django ──
-echo "启动 Django..."
-set -a; source deploy/config/app.env; set +a
-# 先杀掉旧进程
-pkill -f "gunicorn.*config.wsgi" 2>/dev/null || true
-nohup $PYTHON -m gunicorn config.wsgi:application \
-  --bind 0.0.0.0:8000 --chdir backend \
-  --workers 2 --threads 2 \
-  --access-logfile /tmp/gunicorn-access.log \
-  --error-logfile /tmp/gunicorn-error.log \
-  > /dev/null 2>&1 &
-echo "  Django PID: $!"
 
 # 取第一个 IP 用于显示
 ACCESS_IP=$(echo "$LOCAL_IPS" | head -1)

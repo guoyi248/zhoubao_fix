@@ -17,15 +17,22 @@ services:
       - backend
 
   api:
-    image: nginx:alpine
+    build:
+      context: ..
+      dockerfile: docker/api.Dockerfile
     restart: unless-stopped
-    ports:
-      - "8000:8000"
+    env_file:
+      - ./config/app.env
     volumes:
-      - ..:/app:ro
+      - ../backend:/app/backend:ro
     networks:
       - backend
       - frontend
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
 
   postgres:
     image: postgres:17-bookworm
