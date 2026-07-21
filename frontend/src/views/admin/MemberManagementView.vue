@@ -117,7 +117,7 @@ async function deleteUser(user: User) {
           </el-tag>
         </template>
       </el-table-column>
-      <el-table-column label="操作" width="200">
+      <el-table-column label="操作" min-width="240">
         <template #default="{ row }">
           <el-button text size="small" @click="toggleUser(row)">
             {{ row.account_status === 'active' ? '禁用' : '恢复' }}
