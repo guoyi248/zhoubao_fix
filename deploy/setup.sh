@@ -97,61 +97,85 @@ ENABLE_LLM=false
 EOF
 
 # ── 3. MinIO Buckets ──
-echo "MinIO Buckets..."
+echo "========================================"
+echo "  [3/9] MinIO 存储桶"
+echo "========================================"
 docker run --rm --network weekly-report_backend --entrypoint sh minio/mc -c "
   mc alias set local http://minio:9000 hjy hjy12345678 &&
   mc mb local/weekly-originals --ignore-existing &&
   mc mb local/weekly-previews --ignore-existing &&
   mc mb local/weekly-exports --ignore-existing &&
-  echo '  Buckets OK'
-" 2>/dev/null || echo "  Buckets 可能已存在"
+  echo '  ✓ 存储桶就绪'
+" 2>/dev/null || echo "  ✓ 存储桶已存在"
 
 # ── 4. 启动 Docker 服务 ──
-echo "启动 Docker 服务..."
-docker compose -f deploy/compose.yaml -f deploy/compose.production.yaml up -d postgres redis minio clamav gotenberg 2>&1 | tail -3
-echo "等待 PostgreSQL..."
+echo "========================================"
+echo "  [4/9] 启动基础设施容器"
+echo "========================================"
+docker compose -f deploy/compose.yaml -f deploy/compose.production.yaml up -d postgres redis minio clamav gotenberg
+echo ""
+echo "等待 PostgreSQL 就绪..."
 for i in $(seq 1 20); do
   if docker compose -f deploy/compose.yaml -f deploy/compose.production.yaml exec -T postgres pg_isready -U weekly_app -d weekly_report 2>/dev/null; then
-    echo "  PostgreSQL 就绪"
+    echo "  ✓ PostgreSQL 就绪"
     break
   fi
+  printf "  ."
   sleep 2
 done
+echo ""
 
 # ── 5. 安装 Python 依赖 ──
-echo "安装 Python 依赖..."
-$PYTHON -m pip install --quiet \
+echo "========================================"
+echo "  [5/9] 安装 Python 依赖"
+echo "========================================"
+$PYTHON -m pip install \
   django djangorestframework django-cors-headers \
   celery redis "psycopg[binary]" boto3 Pillow PyMuPDF \
   argon2-cffi django-otp python-magic requests \
-  fpdf2 python-docx openpyxl python-pptx gunicorn \
-  2>&1 | tail -1
-echo "  依赖安装完成"
+  fpdf2 python-docx openpyxl python-pptx gunicorn
+echo "  ✓ 依赖安装完成"
+echo ""
 
-# ── 6. 构建并启动 API 容器 ──
+echo "========================================"
+echo "  [6/9] 构建并启动 API 容器（首次约需 5-10 分钟）"
+echo "========================================"
 echo "构建 API 镜像..."
-docker compose -f deploy/compose.yaml -f deploy/compose.production.yaml build api 2>&1 | tail -3
+docker compose -f deploy/compose.yaml -f deploy/compose.production.yaml build api
+echo "  ✓ 镜像构建完成"
 echo "启动 API 容器..."
-docker compose -f deploy/compose.yaml -f deploy/compose.production.yaml up -d api 2>&1 | tail -2
+docker compose -f deploy/compose.yaml -f deploy/compose.production.yaml up -d api
+echo "  ✓ API 容器已启动"
+echo ""
 
 # ── 7. 数据库迁移 ──
-echo "数据库迁移..."
-docker compose -f deploy/compose.yaml -f deploy/compose.production.yaml run --rm api python backend/manage.py migrate --noinput 2>&1 | tail -5
+echo "========================================"
+echo "  [7/9] 数据库迁移"
+echo "========================================"
+docker compose -f deploy/compose.yaml -f deploy/compose.production.yaml run --rm api python backend/manage.py migrate --noinput
+echo "  ✓ 迁移完成"
+echo ""
 
-# ── 8. 管理员 ──
+echo "========================================"
+echo "  [8/9] 创建管理员"
+echo "========================================"
 docker compose -f deploy/compose.yaml -f deploy/compose.production.yaml run --rm api python backend/manage.py shell -c "
 from accounts.models import User, UserRole, AccountStatus
 from organizations.models import Department
 dept, _ = Department.objects.get_or_create(name='技术部', defaults={'code':'tech'})
 if not User.objects.filter(username='admin').exists():
     u = User.objects.create_user(username='admin', password='Admin123!', display_name='系统管理员', role='super_admin', account_status='active', department=dept)
-    print('  Admin 已创建: admin / Admin123!')
+    print('  ✓ 管理员已创建: admin / Admin123!')
 else:
-    print('  Admin 已存在')
-" 2>&1 | grep -E 'Admin|Error|Traceback'
+    print('  ✓ 管理员已存在')
+"
+echo ""
 
-# ── 9. 启动 Nginx ──
-docker compose -f deploy/compose.yaml -f deploy/compose.production.yaml up -d nginx 2>&1 | tail -2
+echo "========================================"
+echo "  [9/9] 启动 Nginx"
+echo "========================================"
+docker compose -f deploy/compose.yaml -f deploy/compose.production.yaml up -d nginx
+echo "  ✓ Nginx 已启动"
 
 # 取第一个 IP 用于显示
 ACCESS_IP=$(echo "$LOCAL_IPS" | head -1)
@@ -159,7 +183,10 @@ ACCESS_IP=$(echo "$LOCAL_IPS" | head -1)
 echo ""
 echo "========================================"
 echo "  ✅ 部署完成!"
-echo "  访问: http://$ACCESS_IP:9527"
-[ -n "$PUBLIC_IP" ] && echo "  公网: http://$PUBLIC_IP:9527"
-echo "  管理员: admin / Admin123!"
 echo "========================================"
+echo "  内网访问:  http://$ACCESS_IP:9527"
+[ -n "$PUBLIC_IP" ] && echo "  公网访问:  http://$PUBLIC_IP:9527"
+echo "  管理员:    admin / Admin123!"
+echo "========================================"
+echo ""
+echo "运行状态检查: docker ps"
