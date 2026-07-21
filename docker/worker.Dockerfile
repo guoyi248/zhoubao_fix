@@ -33,10 +33,11 @@ RUN echo "deb http://deb.debian.org/debian bookworm-backports main" \
 RUN groupadd --gid 10001 app \
  && useradd --uid 10001 --gid app --create-home app
 
+ARG PIP_INDEX_URL=https://pypi.tuna.tsinghua.edu.cn/simple
 WORKDIR /app
 COPY pyproject.toml .
 COPY backend/ backend/
-RUN pip install --no-cache-dir -e .
+RUN pip install --no-cache-dir -i $PIP_INDEX_URL -e .
 
 USER app
 CMD ["celery", "-A", "config", "worker", "-Q", "default,preview,ai", "--loglevel=INFO"]
