@@ -278,7 +278,12 @@ def admin_reset_password(request, user_id):
     serializer.is_valid(raise_exception=True)
 
     target.set_password(serializer.validated_data["new_password"])
-    target.save(update_fields=["password", "password_changed_at"])
+    # 重置密码时自动激活账号（从 INVITED → ACTIVE）
+    if target.account_status == AccountStatus.INVITED:
+        target.account_status = AccountStatus.ACTIVE
+        target.activation_token = ""
+        target.activation_token_expires_at = None
+    target.save(update_fields=["password", "password_changed_at", "account_status", "activation_token", "activation_token_expires_at"])
     SessionRevocation.objects.create(user=target, reason=f"密码由 {request.user.username} 重置")
 
-    return Response({"detail": "密码已重置"})
+    return Response({"detail": "密码已重置，账号已激活"})
