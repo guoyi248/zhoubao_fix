@@ -22,12 +22,14 @@ else
 fi
 echo "  Python: $($PYTHON --version)"
 
-# pip
-if ! $PYTHON -m pip --version &>/dev/null; then
-  echo "安装 pip..."
-  sudo apt update -qq && sudo apt install -y -qq python3-pip
+# 虚拟环境（Debian 13 禁止 pip 直接装到系统 Python）
+if [ ! -d venv ]; then
+  echo "创建虚拟环境..."
+  $PYTHON -m venv venv
 fi
-echo "  pip: OK"
+source venv/bin/activate
+PYTHON=python
+echo "  venv: OK"
 
 # Docker
 if ! docker info &>/dev/null; then
@@ -57,7 +59,7 @@ cat > deploy/config/app.env << EOF
 DJANGO_SETTINGS_MODULE=config.settings.production
 DJANGO_ALLOWED_HOSTS=*
 DJANGO_SECRET_KEY=$(cat deploy/secrets/django_secret_key)
-CSRF_TRUSTED_ORIGINS=http://*
+DJANGO_CSRF_TRUSTED_ORIGINS=http://localhost:9527,http://127.0.0.1:9527
 APP_TIME_ZONE=Asia/Shanghai
 DATABASE_HOST=localhost
 DATABASE_PORT=5432
