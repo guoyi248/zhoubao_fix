@@ -4,13 +4,49 @@ Django 基础设置。
 """
 
 import os
+from datetime import time
 from pathlib import Path
+from django.core.exceptions import ImproperlyConfigured
 
 BASE_DIR = Path(__file__).resolve().parent.parent
 
-SECRET_KEY = os.environ.get("DJANGO_SECRET_KEY", "CHANGE-ME-IN-PRODUCTION")
+# 单机开发读取 backend/.env，系统环境变量优先。部署通过 Compose 的 env_file 注入。
+if os.environ.get("DJANGO_SETTINGS_MODULE") == "config.settings.development":
+    local_env = BASE_DIR.parent / ".env"
+    if local_env.is_file():
+        for line in local_env.read_text(encoding="utf-8-sig").splitlines():
+            entry = line.strip()
+            if not entry or entry.startswith("#"):
+                continue
+            key, sep, value = entry.partition("=")
+            if not sep or not key.strip().isidentifier():
+                raise ImproperlyConfigured("backend/.env 需要每行一个 KEY=value")
+            value = value.strip()
+            if len(value) >= 2 and value[0] == value[-1] and value[0] in ("'", '"'):
+                value = value[1:-1]
+            os.environ.setdefault(key.strip(), value)
+
+# Existing installations may have encrypted credentials with the environment value.
+# Keep that exact value even when a file is also configured.
+SECRET_KEY = os.environ.get("DJANGO_SECRET_KEY", "")
+if not SECRET_KEY:
+    secret_key_file = os.environ.get("DJANGO_SECRET_KEY_FILE")
+    if secret_key_file:
+        try:
+            SECRET_KEY = Path(secret_key_file).read_text(encoding="utf-8").rstrip("\r\n")
+        except (OSError, UnicodeError) as exc:
+            raise ImproperlyConfigured("无法读取 DJANGO_SECRET_KEY_FILE，请检查主钥文件和挂载权限。") from exc
+        if not SECRET_KEY.strip():
+            raise ImproperlyConfigured("DJANGO_SECRET_KEY_FILE 的主钥文件为空。")
+    else:
+        SECRET_KEY = "CHANGE-ME-IN-PRODUCTION"
 
 DEBUG = False
+
+AUDIT_LOCATION_NETWORKS = os.environ.get("AUDIT_LOCATION_NETWORKS", "")
+AUDIT_TRUSTED_PROXIES = os.environ.get("AUDIT_TRUSTED_PROXIES", "")
+AUDIT_TRUSTED_PROXY_HOSTS = os.environ.get("AUDIT_TRUSTED_PROXY_HOSTS", "")
+AUDIT_GEOIP_DATABASE = os.environ.get("AUDIT_GEOIP_DATABASE", "")
 
 ALLOWED_HOSTS: list[str] = []
 
@@ -33,6 +69,7 @@ THIRD_PARTY_APPS = [
 ]
 
 LOCAL_APPS = [
+    "knowledge",
     "accounts",
     "organizations",
     "reporting",
@@ -169,7 +206,7 @@ REST_FRAMEWORK = {
     "DEFAULT_PAGINATION_CLASS": "common.pagination.CursorPagination",
     "DEFAULT_PAGINATION_CLASS_RESULTS": 50,
     "EXCEPTION_HANDLER": "common.exceptions.api_exception_handler",
-    "DATETIME_FORMAT": "%Y-%m-%dT%H:%M:%SZ",
+    "DATETIME_FORMAT": "iso-8601",
     "UNAUTHENTICATED_USER": None,
 }
 
@@ -225,19 +262,42 @@ S3_REGION = os.environ.get("S3_REGION", "internal-1")
 SIGNED_URL_TTL_SECONDS = int(os.environ.get("SIGNED_URL_TTL_SECONDS", "180"))
 
 # ClamAV
+CLAMAV_SCAN_UPLOADS = True
 CLAMAV_HOST = os.environ.get("CLAMAV_HOST", "localhost")
 CLAMAV_PORT = int(os.environ.get("CLAMAV_PORT", "3310"))
 
 # LibreOffice
 PREVIEW_TIMEOUT_SECONDS = int(os.environ.get("PREVIEW_TIMEOUT_SECONDS", "120"))
 
+# 周报提醒
+WEEKLY_REMINDERS_ENABLED = os.environ.get("ENABLE_WEEKLY_REMINDERS", "false").lower() == "true"
+WEEKLY_SITE_URL = os.environ.get("WEEKLY_SITE_URL", "")
+REMINDER_WEEKDAY = int(os.environ.get("REMINDER_WEEKDAY", "7"))
+REMINDER_TIME = time.fromisoformat(os.environ.get("REMINDER_TIME", "18:00"))
+if not 1 <= REMINDER_WEEKDAY <= 7:
+    raise ImproperlyConfigured("REMINDER_WEEKDAY 应为 1（周一）到 7（周日）")
+EMAIL_HOST = os.environ.get("EMAIL_HOST", "")
+EMAIL_PORT = int(os.environ.get("EMAIL_PORT", "587"))
+EMAIL_USE_TLS = os.environ.get("EMAIL_USE_TLS", "true").lower() == "true"
+EMAIL_USE_SSL = os.environ.get("EMAIL_USE_SSL", "false").lower() == "true"
+EMAIL_HOST_USER = os.environ.get("EMAIL_HOST_USER", "")
+EMAIL_HOST_PASSWORD = os.environ.get("EMAIL_HOST_PASSWORD", "")
+DEFAULT_FROM_EMAIL = os.environ.get("DEFAULT_FROM_EMAIL", EMAIL_HOST_USER)
+EMAIL_TIMEOUT = 15
+CELERY_TIMEZONE = TIME_ZONE
+CELERY_BEAT_SCHEDULE = {
+    "weekly-report-reminders": {"task": "reporting.tasks.send_weekly_reminders", "schedule": 300.0},
+    "pending-progress-summaries": {"task": "analysis.tasks.dispatch_pending", "schedule": 60.0},
+}
+
 # LLM
 LLM_ENABLED = os.environ.get("ENABLE_LLM", "false").lower() == "true"
 LLM_PROVIDER = os.environ.get("LLM_PROVIDER", "openai_compatible")
 LLM_BASE_URL = os.environ.get("LLM_BASE_URL", "")
+LLM_API_KEY_ENCRYPTED = os.environ.get("LLM_API_KEY_ENCRYPTED", "")
 LLM_API_KEY = os.environ.get("LLM_API_KEY", "")
 LLM_MODEL = os.environ.get("LLM_MODEL", "")
 LLM_CONNECT_TIMEOUT_SECONDS = int(os.environ.get("LLM_CONNECT_TIMEOUT_SECONDS", "10"))
 LLM_READ_TIMEOUT_SECONDS = int(os.environ.get("LLM_READ_TIMEOUT_SECONDS", "120"))
-LLM_MAX_RETRIES = int(os.environ.get("LLM_MAX_RETRIES", "2"))
-LLM_MAX_INPUT_CHARS = int(os.environ.get("LLM_MAX_INPUT_CHARS", "100000"))
+LLM_MAX_RETRIES = max(0, int(os.environ.get("LLM_MAX_RETRIES", "2")))
+LLM_MAX_INPUT_CHARS = max(1, int(os.environ.get("LLM_MAX_INPUT_CHARS", "100000")))

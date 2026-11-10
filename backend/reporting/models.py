@@ -11,6 +11,7 @@ import json
 
 from django.conf import settings
 from django.db import models, transaction
+from django.utils import timezone
 from common.models import BaseModel
 from common.exceptions import VersionConflictError
 
@@ -52,6 +53,15 @@ class ReportingPeriod(BaseModel):
 
     def __str__(self):
         return f"{self.iso_year}-W{self.iso_week:02d}"
+
+
+class WeeklyReminder(models.Model):
+    period = models.ForeignKey(ReportingPeriod, on_delete=models.CASCADE)
+    user = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.CASCADE)
+    sent_at = models.DateTimeField(null=True)
+
+    class Meta:
+        constraints = [models.UniqueConstraint(fields=["period", "user"], name="one_weekly_reminder_per_user")]
 
 
 class WeeklyReportQuerySet(models.QuerySet):
@@ -122,15 +132,21 @@ class WeeklyReport(BaseModel):
 
     def save_draft(self, content: dict, expected_version: int) -> "WeeklyReport":
         """乐观锁保存草稿。"""
-        if self.optimistic_version != expected_version:
+        now = timezone.now()
+        updated = WeeklyReport.objects.filter(
+            pk=self.pk, optimistic_version=expected_version,
+            status__in=(ReportStatus.DRAFT, ReportStatus.RESUBMITTED),
+        ).update(draft_content_json=content, optimistic_version=expected_version + 1, updated_at=now)
+        if not updated:
+            self.refresh_from_db()
             raise VersionConflictError()
+        self.optimistic_version = expected_version + 1
         self.draft_content_json = content
-        self.optimistic_version += 1
-        self.save(update_fields=["draft_content_json", "optimistic_version", "updated_at"])
+        self.updated_at = now
         return self
 
     @transaction.atomic
-    def submit(self, submitted_by, confirmed_pdf_attachment=None) -> "WeeklyReportRevision":
+    def submit(self, submitted_by, confirmed_pdf_attachment=None, reason="") -> "WeeklyReportRevision":
         """提交周报，创建不可变修订版。"""
         if self.status not in {ReportStatus.DRAFT, ReportStatus.RESUBMITTED}:
             raise ValueError(f"无法提交状态为 {self.status} 的周报")
@@ -145,15 +161,18 @@ class WeeklyReport(BaseModel):
             submitted_by=submitted_by,
             content_sha256=content_sha256,
             confirmed_pdf_attachment=confirmed_pdf_attachment,
+            reason=reason,
         )
-
-        new_status = ReportStatus.RESUBMITTED if self.status == ReportStatus.SUBMITTED else ReportStatus.SUBMITTED
-
-        self.status = new_status
+        revision.attachments.set(self.attachments.filter(is_current=True))
+        self.status = ReportStatus.SUBMITTED
         self.current_revision = revision
         self.optimistic_version += 1
         self.save(update_fields=["status", "current_revision", "optimistic_version", "updated_at"])
 
+        from system_config.integrations import get_config
+        if get_config("model")["enabled"]:
+            from analysis.tasks import queue_revision
+            queue_revision(revision)
         return revision
 
 
@@ -183,6 +202,9 @@ class WeeklyReportRevision(BaseModel):
         verbose_name="成员确认的 PDF",
     )
     reason = models.CharField("提交/修改原因", max_length=500, blank=True, default="")
+    attachments = models.ManyToManyField(
+        "attachments.Attachment", related_name="submitted_revisions", blank=True, verbose_name="提交时的附件",
+    )
 
     class Meta:
         db_table = "weekly_report_revisions"

@@ -10,7 +10,12 @@ from datetime import timedelta
 
 from django.contrib.auth import authenticate, login as django_login, logout as django_logout
 from django.contrib.auth.password_validation import validate_password
+from django.db import IntegrityError, transaction
+from django.db.models import OuterRef, Q, Subquery
+from django.db.models.functions import Coalesce
+from django_otp import match_token
 from django.utils import timezone
+from django.views.decorators.csrf import csrf_protect
 from django.core.exceptions import ValidationError as DjangoValidationError
 
 from rest_framework import status
@@ -21,6 +26,7 @@ from rest_framework.response import Response
 from .models import User, UserRole, AccountStatus, RegistrationRequest, SessionRevocation
 from .serializers import (
     LoginSerializer,
+    AdminUserSerializer,
     ChangePasswordSerializer,
     ActivateSerializer,
     UserProfileSerializer,
@@ -28,6 +34,7 @@ from .serializers import (
     UpdateUserSerializer,
     ResetPasswordSerializer,
 )
+from audit.events import record
 from audit.models import AuditEvent
 from common.exceptions import (
     InvalidCredentialsError,
@@ -43,6 +50,7 @@ from common.exceptions import (
 
 @api_view(["POST"])
 @permission_classes([AllowAny])
+@csrf_protect
 def login_view(request):
     """POST /api/v1/auth/login"""
     serializer = LoginSerializer(data=request.data)
@@ -51,32 +59,26 @@ def login_view(request):
 
     user = authenticate(request, username=data["username"], password=data["password"])
     if user is None:
-        AuditEvent.objects.create(
-            event_type=AuditEvent.EventType.LOGIN_FAILURE,
-            actor_ip=request.META.get("REMOTE_ADDR", ""),
-            summary=f"登录失败: {data['username']}",
-            result="failure",
-        )
+        record(request, AuditEvent.EventType.LOGIN_FAILURE, f"登录失败 · {data['username']}", actor=None, result="failure")
         raise InvalidCredentialsError()
 
     if user.account_status != AccountStatus.ACTIVE:
+        record(request, AuditEvent.EventType.LOGIN_FAILURE, "账号未激活或已停用", actor=user, result="denied")
         raise AccountDisabledError()
 
-    AuditEvent.objects.create(
-        event_type=AuditEvent.EventType.LOGIN_SUCCESS,
-        actor=user,
-        actor_ip=request.META.get("REMOTE_ADDR", ""),
-        result="success",
-    )
-
-    # TOTP 校验（如已启用）
-    if user.totp_enabled and not data.get("totp_code"):
-        return Response(
-            {"code": "TOTP_REQUIRED", "message": "请提供 TOTP 验证码"},
-            status=status.HTTP_401_UNAUTHORIZED,
-        )
+    if user.totp_enabled or user.totp_required:
+        code = data["totp_code"]
+        if not code:
+            return Response({"code": "TOTP_REQUIRED", "message": "请提供 TOTP 验证码"}, status=401)
+        device = match_token(user, code) if len(code) == 6 and code.isascii() and code.isdigit() else None
+        if device is None:
+            record(request, AuditEvent.EventType.LOGIN_FAILURE, "TOTP 验证失败", actor=user, result="failure")
+            return Response({"code": "INVALID_TOTP", "message": "验证码无效或已使用"}, status=401)
+        user.otp_device = device
 
     django_login(request, user)
+    record(request, AuditEvent.EventType.LOGIN_SUCCESS, f"登录账号 {user.username}", actor=user)
+
     user.last_login_at = timezone.now()
     user.save(update_fields=["last_login_at"])
 
@@ -92,6 +94,8 @@ def logout_view(request):
 
 @api_view(["POST"])
 @permission_classes([AllowAny])
+@csrf_protect
+@transaction.atomic
 def activate_view(request):
     """POST /api/v1/auth/activate —— 使用一次性令牌激活账号并设置密码。"""
     serializer = ActivateSerializer(data=request.data)
@@ -99,7 +103,9 @@ def activate_view(request):
     data = serializer.validated_data
 
     try:
-        user = User.objects.get(activation_token=data["token"])
+        user = User.objects.select_for_update().get(
+            activation_token=data["token"], account_status=AccountStatus.INVITED, is_active=True,
+        )
     except User.DoesNotExist:
         raise ObjectNotFound(detail="激活链接无效或已过期")
 
@@ -111,8 +117,7 @@ def activate_view(request):
     except DjangoValidationError as e:
         return Response({"code": "WEAK_PASSWORD", "message": " ".join(e.messages)}, status=status.HTTP_400_BAD_REQUEST)
 
-    user.set_password(data["password"])
-    user.activate()
+    user.activate(data["password"])
     return Response({"detail": "账号已激活，请登录"})
 
 
@@ -133,6 +138,7 @@ def change_password_view(request):
         return Response({"code": "WEAK_PASSWORD", "message": " ".join(e.messages)}, status=status.HTTP_400_BAD_REQUEST)
 
     user.set_password(data["new_password"])
+    user.password_changed_at = timezone.now()
     user.save(update_fields=["password", "password_changed_at"])
     # 修改密码后撤销所有其他会话
     SessionRevocation.objects.create(user=user, reason="密码已修改")
@@ -160,209 +166,175 @@ def _require_admin(user):
         raise PermissionDeniedError()
 
 
-@api_view(["POST"])
-def admin_create_user(request):
-    """POST /api/v1/admin/users —— 管理员创建账号。"""
-    _require_admin(request.user)
+def _lock_accounts(request, user_id=None):
+    # 在同一事务内重新核实操作者权限，以固定顺序锁定双方，避免并发互相降权。
+    ids = [request.user.pk] if user_id is None else [request.user.pk, user_id]
+    accounts = {user.pk: user for user in User.objects.select_for_update().filter(pk__in=ids).order_by("pk")}
+    actor = accounts.get(request.user.pk)
+    if not actor or actor.account_status != AccountStatus.ACTIVE:
+        raise PermissionDeniedError()
+    _require_admin(actor)
+    if user_id is None:
+        return actor
+    target = accounts.get(user_id)
+    if not target or target.account_status == AccountStatus.DELETED:
+        raise ObjectNotFound()
+    return target
 
+
+def _username_taken():
+    return Response({"code": "USERNAME_TAKEN", "message": "该账号名已被使用，请换一个账号名"}, status=409)
+
+
+@api_view(["POST"])
+@transaction.atomic
+def admin_create_user(request):
+    _lock_accounts(request)
     serializer = CreateUserSerializer(data=request.data)
     serializer.is_valid(raise_exception=True)
     data = serializer.validated_data
-
-    if User.objects.filter(username=data["username"]).exists():
-        return Response(
-            {"code": "USERNAME_TAKEN", "message": "账号已存在"},
-            status=status.HTTP_409_CONFLICT,
-        )
-
     token = uuid.uuid4().hex
-    user = User.objects.create(
-        username=data["username"],
-        display_name=data["display_name"],
-        email=data.get("email", ""),
-        department_id=data.get("department_id"),
-        role=data.get("role", UserRole.MEMBER),
-        account_status=AccountStatus.INVITED,
-        activation_token=token,
-        activation_token_expires_at=timezone.now() + timedelta(hours=24),
-    )
-    user.set_unusable_password()
-
-    AuditEvent.objects.create(
-        event_type=AuditEvent.EventType.USER_CREATED,
-        actor=request.user,
-        actor_ip=request.META.get("REMOTE_ADDR", ""),
-        target_type="user",
-        target_id=str(user.id),
-        summary=f"创建用户: {user.display_name} ({user.username})",
-        result="success",
-    )
-
-    return Response(
-        {
-            "id": str(user.id),
-            "username": user.username,
-            "activation_token": token,
-            "detail": "账号已创建，请将激活链接发送给成员",
-        },
-        status=status.HTTP_201_CREATED,
-    )
+    try:
+        with transaction.atomic():
+            user = User.objects.create_user(
+                **data, account_status=AccountStatus.INVITED,
+                activation_token=token, activation_token_expires_at=timezone.now() + timedelta(hours=24),
+            )
+    except IntegrityError:
+        if User.objects.filter(username=data["username"]).exists():
+            return _username_taken()
+        raise
+    record(request, AuditEvent.EventType.USER_CREATED, f"新增{user.get_role_display()} · {user}", target=user)
+    return Response({"id": str(user.pk), "username": user.username, "activation_token": token,
+                     "detail": "账号已创建，激活链接在 24 小时内有效"}, status=201)
 
 
 @api_view(["GET"])
 def admin_list_users(request):
-    """GET /api/v1/admin/users —— 管理员查看用户列表。"""
     _require_admin(request.user)
-
-    qs = User.objects.visible_to(request.user)
-    department = request.GET.get("department")
-    role = request.GET.get("role")
-    account_status = request.GET.get("status")
-
-    if department:
-        qs = qs.filter(department_id=department)
-    if role:
-        qs = qs.filter(role=role)
-    if account_status:
-        qs = qs.filter(account_status=account_status)
-
-    users = qs.select_related("department")[:200]
-    return Response(UserProfileSerializer(users, many=True).data)
+    qs = User.objects.visible_to(request.user).select_related("department")
+    for key, field in (("department", "department_id"), ("role", "role"), ("status", "account_status")):
+        if value := request.GET.get(key):
+            if key == "department":
+                try:
+                    value = uuid.UUID(value)
+                except ValueError:
+                    return Response({"message": "部门标识无效"}, status=400)
+            qs = qs.filter(**{field: value})
+    if query := request.GET.get("q", "").strip():
+        qs = qs.filter(Q(username__icontains=query) | Q(display_name__icontains=query) | Q(email__icontains=query))
+    latest_login = AuditEvent.objects.filter(actor_id=OuterRef("pk"), event_type=AuditEvent.EventType.LOGIN_SUCCESS).order_by("-created_at", "-event_id")
+    qs = qs.annotate(
+        latest_login_time=Coalesce("last_login_at", Subquery(latest_login.values("created_at")[:1]), "last_login"),
+        last_login_ip=Subquery(latest_login.values("actor_ip")[:1]),
+        last_login_location=Subquery(latest_login.values("actor_location")[:1]),
+    ).order_by("username", "pk")
+    if "page" not in request.GET:
+        return Response(AdminUserSerializer(qs[:200], many=True).data)
+    from django.core.paginator import Paginator
+    page = Paginator(qs, 25).get_page(request.GET.get("page"))
+    return Response({"users": AdminUserSerializer(page.object_list, many=True).data, "total": page.paginator.count,
+                     "page": page.number, "page_size": page.paginator.per_page})
 
 
 @api_view(["PATCH"])
+@transaction.atomic
 def admin_update_user(request, user_id):
-    """PATCH /api/v1/admin/users/{id}"""
-    _require_admin(request.user)
-
+    target = _lock_accounts(request, user_id)
     serializer = UpdateUserSerializer(data=request.data, partial=True)
     serializer.is_valid(raise_exception=True)
-    data = serializer.validated_data
-
+    changes = {key: value for key, value in serializer.validated_data.items() if getattr(target, key) != value}
+    if not changes:
+        return Response(UserProfileSerializer(target).data)
+    if "role" in changes and request.user.pk == target.pk:
+        raise PermissionDeniedError(detail="请由另一位管理员调整你的角色")
+    old_name = str(target)
+    for key, value in changes.items():
+        setattr(target, key, value)
+    fields = list(changes)
+    if changes.get("role") == UserRole.MEMBER:
+        target.is_staff = target.is_superuser = False
+        fields.extend(["is_staff", "is_superuser"])
     try:
-        target = User.objects.get(id=user_id)
-    except User.DoesNotExist:
-        raise ObjectNotFound()
-
-    # 非超级管理员不能修改管理员
-    if target.is_admin and not request.user.is_super_admin:
-        raise PermissionDeniedError(detail="只有超级管理员可以修改管理员账号")
-
-    for field, value in data.items():
-        if field == "department_id":
-            target.department_id = value
-        else:
-            setattr(target, field, value)
-
-    target.save(update_fields=list(data.keys()))
+        with transaction.atomic():
+            target.save(update_fields=fields)
+    except IntegrityError:
+        if "username" in changes and User.objects.exclude(pk=user_id).filter(username=changes["username"]).exists():
+            return _username_taken()
+        raise
+    labels = {"username": "账号名", "display_name": "姓名", "email": "提醒邮箱", "department_id": "部门", "role": "角色"}
+    summary = f"{old_name} · 修改{'、'.join(labels[field] for field in changes)}"
+    if "role" in changes:
+        summary += f"为{target.get_role_display()}"
+    record(request, AuditEvent.EventType.ROLE_CHANGED if "role" in changes else AuditEvent.EventType.USER_UPDATED,
+           summary, target=target)
     return Response(UserProfileSerializer(target).data)
 
 
 @api_view(["POST"])
+@transaction.atomic
 def admin_disable_user(request, user_id):
-    """POST /api/v1/admin/users/{id}/disable"""
-    _require_admin(request.user)
-    try:
-        target = User.objects.get(id=user_id)
-    except User.DoesNotExist:
-        raise ObjectNotFound()
-
-    if target.is_super_admin:
-        raise PermissionDeniedError(detail="不能禁用超级管理员")
-
+    target = _lock_accounts(request, user_id)
+    if target.pk == request.user.pk:
+        raise PermissionDeniedError(detail="不能停用自己的账号")
+    if target.account_status != AccountStatus.ACTIVE:
+        return Response({"message": "只能停用已激活的账号"}, status=409)
     target.disable()
-    AuditEvent.objects.create(
-        event_type=AuditEvent.EventType.USER_DISABLED,
-        actor=request.user,
-        actor_ip=request.META.get("REMOTE_ADDR", ""),
-        target_type="user",
-        target_id=str(target.id),
-        summary=f"禁用用户: {target.display_name} ({target.username})",
-        result="success",
-    )
-    return Response({"detail": "账号已禁用"})
+    record(request, AuditEvent.EventType.USER_DISABLED, f"停用账号 · {target}", target=target)
+    return Response({"detail": "账号已停用"})
 
 
 @api_view(["POST"])
+@transaction.atomic
 def admin_enable_user(request, user_id):
-    """POST /api/v1/admin/users/{id}/enable"""
-    _require_admin(request.user)
-    try:
-        target = User.objects.get(id=user_id)
-    except User.DoesNotExist:
-        raise ObjectNotFound()
+    target = _lock_accounts(request, user_id)
+    if target.account_status != AccountStatus.DISABLED:
+        return Response({"code": "NOT_DISABLED", "message": "只有已停用的账号可以恢复"}, status=409)
     target.enable()
-    AuditEvent.objects.create(
-        event_type=AuditEvent.EventType.USER_ENABLED,
-        actor=request.user,
-        actor_ip=request.META.get("REMOTE_ADDR", ""),
-        target_type="user",
-        target_id=str(target.id),
-        summary=f"恢复用户: {target.display_name} ({target.username})",
-        result="success",
-    )
+    record(request, AuditEvent.EventType.USER_ENABLED, f"恢复账号 · {target}", target=target)
     return Response({"detail": "账号已恢复"})
 
 
 @api_view(["POST"])
+@transaction.atomic
 def admin_reset_password(request, user_id):
-    """POST /api/v1/admin/users/{id}/reset-password"""
-    _require_admin(request.user)
+    target = _lock_accounts(request, user_id)
+    form = ResetPasswordSerializer(data=request.data)
+    form.is_valid(raise_exception=True)
+    password = form.validated_data["new_password"]
     try:
-        target = User.objects.get(id=user_id)
-    except User.DoesNotExist:
-        raise ObjectNotFound()
-
-    if target.is_super_admin and not request.user.is_super_admin:
-        raise PermissionDeniedError()
-
-    serializer = ResetPasswordSerializer(data=request.data)
-    serializer.is_valid(raise_exception=True)
-
-    target.set_password(serializer.validated_data["new_password"])
-    # 重置密码时自动激活账号（从 INVITED → ACTIVE）
+        validate_password(password, target)
+    except DjangoValidationError as exc:
+        return Response({"code": "WEAK_PASSWORD", "message": " ".join(exc.messages)}, status=400)
+    target.set_password(password)
+    target.password_changed_at = timezone.now()
     if target.account_status == AccountStatus.INVITED:
         target.account_status = AccountStatus.ACTIVE
         target.activation_token = ""
         target.activation_token_expires_at = None
     target.save(update_fields=["password", "password_changed_at", "account_status", "activation_token", "activation_token_expires_at"])
     SessionRevocation.objects.create(user=target, reason=f"密码由 {request.user.username} 重置")
-
-    AuditEvent.objects.create(
-        event_type="PASSWORD_RESET",
-        actor=request.user,
-        actor_ip=request.META.get("REMOTE_ADDR", ""),
-        target_type="user",
-        target_id=str(target.id),
-        summary=f"密码重置: {target.display_name} ({target.username})",
-        result="success",
-    )
-
-    return Response({"detail": "密码已重置，账号已激活"})
+    record(request, AuditEvent.EventType.PASSWORD_RESET, f"重置密码 · {target}", target=target)
+    if target.pk == request.user.pk:
+        from django.contrib.auth import update_session_auth_hash
+        update_session_auth_hash(request, target)
+    return Response({"detail": "密码已重置"})
 
 
 @api_view(["DELETE"])
+@transaction.atomic
 def admin_delete_user(request, user_id):
-    """DELETE /api/v1/admin/users/{id} —— 管理员删除成员。"""
-    _require_admin(request.user)
-    try:
-        target = User.objects.get(id=user_id)
-    except User.DoesNotExist:
-        raise ObjectNotFound()
-
-    if target.id == request.user.id:
-        raise PermissionDeniedError(detail="不能删除自己")
-    if target.is_super_admin and not request.user.is_super_admin:
-        raise PermissionDeniedError(detail="只有超级管理员可以删除超级管理员")
-
-    audit_summary = f"删除用户: {target.display_name} ({target.username})"
-    target.delete()
-    AuditEvent.objects.create(
-        event_type="USER_DELETED",
-        actor=request.user,
-        actor_ip=request.META.get("REMOTE_ADDR", ""),
-        summary=audit_summary,
-        result="success",
-        risk_level="high",
-    )
-    return Response({"detail": "账号已删除"})
+    target = _lock_accounts(request, user_id)
+    if target.pk == request.user.pk:
+        raise PermissionDeniedError(detail="不能删除自己的账号")
+    # 保留原始外键以供历史周报、附件、组会和操作记录追溯。
+    target.account_status = AccountStatus.DELETED
+    target.is_active = False
+    target.is_staff = target.is_superuser = False
+    target.activation_token = ""
+    target.activation_token_expires_at = None
+    target.set_unusable_password()
+    target.save(update_fields=["account_status", "is_active", "is_staff", "is_superuser", "activation_token",
+                               "activation_token_expires_at", "password"])
+    record(request, AuditEvent.EventType.USER_DELETED, f"删除账号 · {target}", target=target, risk="high")
+    return Response({"detail": "账号已删除，历史周报与操作记录已保留"})

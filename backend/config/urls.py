@@ -1,6 +1,5 @@
 """Root URL configuration."""
 
-from django.conf import settings
 from django.urls import include, path
 from django.views.decorators.csrf import ensure_csrf_cookie
 from django.http import JsonResponse
@@ -55,6 +54,7 @@ urlpatterns = [
     path("api/v1/auth/csrf", csrf_token_view, name="auth-csrf"),
 
     # API v1
+    path("api/v1/knowledge/", include("knowledge.urls")),
     path("api/v1/auth/", include("accounts.urls_auth")),
     path("api/v1/me/", include("accounts.urls_me")),
     path("api/v1/admin/", include("accounts.urls_admin")),
@@ -70,11 +70,3 @@ urlpatterns = [
     path("api/v1/admin/audit/", include("audit.urls")),
     path("api/v1/admin/config/", include("system_config.urls")),
 ]
-
-if settings.DEBUG:
-    from django.conf.urls.static import static
-    from django.conf import settings as s
-    urlpatterns += static("/media/", document_root=getattr(s, "MEDIA_ROOT", s.BASE_DIR / "media"))
-    urlpatterns += [
-        path("api/v1/auth/", include("rest_framework.urls", namespace="rest_framework")),
-    ]

@@ -6,6 +6,7 @@
 from .base import *  # noqa: F403
 
 DEBUG = False
+CLAMAV_SCAN_UPLOADS = False
 
 DATABASES = {
     "default": {

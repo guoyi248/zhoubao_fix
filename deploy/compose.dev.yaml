@@ -7,11 +7,13 @@ name: weekly-report-dev
 services:
   # ── API: Django dev server ────────────────────────────
   api:
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
     build:
       context: ..
       dockerfile: docker/api.Dockerfile
     restart: unless-stopped
-    command: python manage.py runserver 0.0.0.0:8000
+    command: python backend/manage.py runserver 0.0.0.0:8000
     environment:
       - DJANGO_SETTINGS_MODULE=config.settings.development
       - DATABASE_HOST=postgres
@@ -19,6 +21,7 @@ services:
       - DATABASE_NAME=weekly_report
       - DATABASE_USER=weekly_app
       - DATABASE_PASSWORD=dev_password
+      - CELERY_TASK_ALWAYS_EAGER=false
       - REDIS_URL=redis://redis:6379/0
       - S3_ENDPOINT=http://minio:9000
       - S3_ACCESS_KEY=minioadmin
@@ -26,9 +29,9 @@ services:
       - CLAMAV_HOST=clamav
       - CLAMAV_PORT=3310
     ports:
-      - "8000:8000"
+      - "127.0.0.1:8000:8000"
     volumes:
-      - ../backend:/app
+      - ../backend:/app/backend
     depends_on:
       postgres:
         condition: service_healthy
@@ -38,7 +41,9 @@ services:
       - devnet
 
   # ── Worker Core ───────────────────────────────────────
-  worker-core:
+  worker-core: &dev_worker
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
     build:
       context: ..
       dockerfile: docker/worker.Dockerfile
@@ -51,6 +56,7 @@ services:
       - DATABASE_NAME=weekly_report
       - DATABASE_USER=weekly_app
       - DATABASE_PASSWORD=dev_password
+      - CELERY_TASK_ALWAYS_EAGER=false
       - REDIS_URL=redis://redis:6379/0
       - S3_ENDPOINT=http://minio:9000
       - S3_ACCESS_KEY=minioadmin
@@ -58,7 +64,7 @@ services:
       - CLAMAV_HOST=clamav
       - CLAMAV_PORT=3310
     volumes:
-      - ../backend:/app
+      - ../backend:/app/backend
     depends_on:
       postgres:
         condition: service_healthy
@@ -66,6 +72,10 @@ services:
         condition: service_healthy
     networks:
       - devnet
+
+  scheduler:
+    <<: *dev_worker
+    command: celery -A config beat --schedule=/tmp/weekly-beat --loglevel=INFO
 
   # ── Worker Preview ────────────────────────────────────
   worker-preview:
@@ -81,6 +91,7 @@ services:
       - DATABASE_NAME=weekly_report
       - DATABASE_USER=weekly_app
       - DATABASE_PASSWORD=dev_password
+      - CELERY_TASK_ALWAYS_EAGER=false
       - REDIS_URL=redis://redis:6379/0
       - S3_ENDPOINT=http://minio:9000
       - S3_ACCESS_KEY=minioadmin
@@ -88,7 +99,7 @@ services:
       - CLAMAV_HOST=clamav
       - CLAMAV_PORT=3310
     volumes:
-      - ../backend:/app
+      - ../backend:/app/backend
     depends_on:
       postgres:
         condition: service_healthy
@@ -101,10 +112,12 @@ services:
   frontend:
     image: node:22-bookworm-slim
     restart: unless-stopped
+    environment:
+      - VITE_PROXY_TARGET=http://api:8000
     working_dir: /frontend
     command: sh -c "npm install && npm run dev -- --host 0.0.0.0"
     ports:
-      - "5173:5173"
+      - "127.0.0.1:5173:5173"
     volumes:
       - ../frontend:/frontend
       - frontend_modules:/frontend/node_modules
@@ -117,6 +130,8 @@ services:
   postgres:
     image: postgres:17-bookworm
     restart: unless-stopped
+    ports:
+      - "127.0.0.1:5432:5432"
     environment:
       POSTGRES_DB: weekly_report
       POSTGRES_USER: weekly_app
@@ -135,6 +150,8 @@ services:
   redis:
     image: redis:7.4-bookworm
     restart: unless-stopped
+    ports:
+      - "127.0.0.1:6379:6379"
     volumes:
       - redisdata:/data
     networks:
@@ -149,6 +166,9 @@ services:
   minio:
     image: quay.io/minio/minio:latest
     restart: unless-stopped
+    ports:
+      - "127.0.0.1:9000:9000"
+      - "127.0.0.1:9001:9001"
     command: server /data --console-address ":9001"
     environment:
       MINIO_ROOT_USER: minioadmin
@@ -161,9 +181,10 @@ services:
   # ── Gotenberg（可选）：高保真 Office→PDF 转换 ──────────
   gotenberg:
     image: gotenberg/gotenberg:8
+    command: ["gotenberg", "--api-timeout=120s"]
     restart: unless-stopped
     ports:
-      - "3000:3000"
+      - "127.0.0.1:3000:3000"
     networks:
       - devnet
     profiles: ["full"]
@@ -172,6 +193,8 @@ services:
   clamav:
     image: clamav/clamav:latest
     restart: unless-stopped
+    ports:
+      - "127.0.0.1:3310:3310"
     volumes:
       - clamavdata:/var/lib/clamav
     networks:

@@ -1,121 +1,79 @@
 <script setup lang="ts">
-import { ref, onMounted } from "vue";
+import { onBeforeUnmount, ref, watch } from "vue";
+import { useRoute, useRouter } from "vue-router";
+import { Search } from "@element-plus/icons-vue";
 import api from "@/utils/api";
 
-interface AuditEvent {
-  event_id: string;
-  event_type: string;
-  created_at: string;
-  actor_name: string;
-  actor_ip: string;
-  target_type: string;
-  target_id: string;
-  result: string;
-  summary: string;
-  risk_level: string;
+interface AuditEntry {
+  event_id:string; event_type:string; event_label:string; created_at:string;
+  actor_name:string; actor_username:string; actor_ip:string|null; actor_location:string;
+  result:string; summary:string;
 }
-
-const events = ref<AuditEvent[]>([]);
-const loading = ref(true);
-const filter = ref({ days: 7, event_type: "", actor: "" });
-
-const eventTypeLabels: Record<string, string> = {
-  LOGIN_SUCCESS: "登录成功",
-  LOGIN_FAILURE: "登录失败",
-  USER_CREATED: "创建用户",
-  USER_DISABLED: "禁用用户",
-  USER_ENABLED: "恢复用户",
-  ROLE_CHANGED: "角色变更",
-  PASSWORD_RESET: "密码重置",
-  REPORT_SUBMITTED: "周报提交",
-  REPORT_RESUBMITTED: "周报补交",
-  REPORT_VIEWED_BY_ADMIN: "管理员查看周报",
-  ATTACHMENT_UPLOADED: "附件上传",
-  ATTACHMENT_DOWNLOADED: "附件下载",
-  ATTACHMENT_REJECTED: "附件拒绝",
-  PREVIEW_RETRIED: "预览重试",
-  AI_REGENERATED: "AI 重新生成",
-  AI_ITEM_EDITED: "AI 条目人工修改",
-  MEETING_STARTED: "组会开始",
-  REPORT_MARKED_DISCUSSED: "标记已讨论",
-  EXPORT_CREATED: "导出创建",
-  EXPORT_DOWNLOADED: "导出下载",
-  SYSTEM_SETTING_CHANGED: "系统配置变更",
-  EMERGENCY_ACCOUNT_ENABLED: "应急账号启用",
-};
-
-async function loadEvents() {
-  loading.value = true;
+const route = useRoute();
+const router = useRouter();
+const groups = [{id:"", name:"全部记录"}, {id:"login",name:"登录记录"}, {id:"report",name:"周报操作"}, {id:"account",name:"用户管理"}];
+const group = ref("");
+const days = ref(7);
+const query = ref("");
+const logs = ref<AuditEntry[]>([]);
+const page = ref(1);
+const total = ref(0);
+const loading = ref(false);
+const error = ref("");
+let generation = 0;
+let searchTimer: number | undefined;
+function searchAfterTyping() {
+  window.clearTimeout(searchTimer);
+  searchTimer = window.setTimeout(() => load(), 250);
+}
+onBeforeUnmount(() => window.clearTimeout(searchTimer));
+function formatTime(iso:string) { return new Date(iso).toLocaleString("zh-CN",{timeZone:"Asia/Shanghai",hour12:false}); }
+async function load(p = 1) {
+  window.clearTimeout(searchTimer);
+  const current = ++generation;
+  loading.value=true; error.value="";
   try {
-    const params = new URLSearchParams();
-    if (filter.value.days) params.set("days", String(filter.value.days));
-    if (filter.value.event_type) params.set("event_type", filter.value.event_type);
-    if (filter.value.actor) params.set("actor", filter.value.actor);
-    const { data } = await api.get(`/admin/audit?${params.toString()}`);
-    events.value = data.events || [];
-  } finally {
-    loading.value = false;
-  }
+    const {data}=await api.get("/admin/audit/",{params:{days:days.value,group:group.value,actor:query.value.trim(),actor_id:route.query.actor_id,page:p}});
+    if(current!==generation) return;
+    logs.value=data.events; total.value=data.count; page.value=data.page;
+  } catch(e:any){ if(current===generation)error.value=e?.message || "记录加载失败"; }
+  finally { if(current===generation)loading.value=false; }
 }
-
-function formatTime(iso: string) {
-  return new Date(iso).toLocaleString("zh-CN");
-}
-
-onMounted(loadEvents);
+function selectGroup(id:string){ group.value=id; void load(); }
+watch(()=>route.query.actor_id,()=>{ query.value=""; void load(); },{immediate:true});
 </script>
 
 <template>
-  <div class="audit" v-loading="loading">
-    <div class="audit-header">
-      <h2>审计日志</h2>
-      <div class="filters">
-        <el-select v-model="filter.days" @change="loadEvents" style="width:120px">
-          <el-option :value="1" label="最近1天" />
-          <el-option :value="7" label="最近7天" />
-          <el-option :value="30" label="最近30天" />
+  <div class="stack">
+    <header class="glass-heading"><h1 class="page-title">操作记录</h1></header>
+    <section class="panel audit-panel" aria-label="操作记录筛选和列表">
+      <nav class="log-tabs" aria-label="记录类型"><button v-for="g in groups" :key="g.id" :aria-pressed="group===g.id" @click="selectGroup(g.id)">{{ g.name }}</button></nav>
+      <form class="filters" @submit.prevent="load()">
+        <el-tag v-if="route.query.actor_id" closable @close="router.replace({path:'/admin/audit'})">{{ route.query.name || '所选用户' }}</el-tag>
+        <el-input v-else v-model="query" placeholder="搜索账号或姓名" aria-label="搜索操作人" :prefix-icon="Search" clearable @input="searchAfterTyping" />
+        <el-select v-model="days" aria-label="选择记录时间范围" @change="load()">
+          <el-option v-for="d in [1,7,30,90,365]" :key="d" :value="d" :label="'最近 '+d+' 天'" />
         </el-select>
-        <el-select v-model="filter.event_type" @change="loadEvents" clearable placeholder="全部类型" style="width:160px">
-          <el-option v-for="(label, key) in eventTypeLabels" :key="key" :value="key" :label="label" />
-        </el-select>
-        <el-input v-model="filter.actor" @change="loadEvents" clearable placeholder="操作人" style="width:140px" />
+      </form>
+      <p v-if="error" role="alert">{{ error }} <button class="link-button" @click="load(page)">重试</button></p>
+      <div v-else v-loading="loading" :aria-busy="loading">
+        <div class="log-grid headings" aria-hidden="true"><span>操作</span><span>操作人</span><span>地点 / IP</span><span>北京时间</span></div>
+        <article v-for="event in logs" :key="event.event_id" class="log-grid log-row">
+          <div><strong>{{ event.event_label }}</strong><span v-if="event.result!=='success'" class="failed">{{ event.result==='denied'?'已拒绝':'失败' }}</span><small v-if="event.summary">{{ event.summary }}</small></div>
+          <div>{{ event.actor_name || '未认证用户' }}<small v-if="event.actor_username">{{ event.actor_username }}</small></div>
+          <div>{{ event.actor_location || "未记录地点" }}<small>{{ event.actor_ip || "未记录 IP" }}</small></div>
+          <time :datetime="event.created_at"><span class="mobile-label">北京时间</span>{{ formatTime(event.created_at) }}</time>
+        </article>
+        <p v-if="!loading && !logs.length" class="empty-copy">所选时间内没有匹配的记录。</p>
+        <footer><span>共 {{ total }} 条记录</span><el-pagination v-if="total>30" small layout="prev,pager,next" :total="total" :page-size="30" :current-page="page" @current-change="load" /></footer>
       </div>
-    </div>
-
-    <el-table :data="events" size="small" max-height="calc(100vh - 200px)">
-      <el-table-column label="时间" width="170">
-        <template #default="{ row }">{{ formatTime(row.created_at) }}</template>
-      </el-table-column>
-      <el-table-column label="类型" width="130">
-        <template #default="{ row }">{{ eventTypeLabels[row.event_type] || row.event_type }}</template>
-      </el-table-column>
-      <el-table-column prop="actor_name" label="操作人" width="100" />
-      <el-table-column prop="actor_ip" label="IP" width="130" />
-      <el-table-column label="目标" min-width="160">
-        <template #default="{ row }">{{ row.target_type ? `${row.target_type}#${row.target_id}` : '-' }}</template>
-      </el-table-column>
-      <el-table-column label="结果" width="70">
-        <template #default="{ row }">
-          <el-tag :type="row.result==='success'?'success':row.result==='denied'?'danger':'warning'" size="small">
-            {{ row.result === 'success' ? '成功' : row.result === 'denied' ? '拒绝' : '失败' }}
-          </el-tag>
-        </template>
-      </el-table-column>
-      <el-table-column label="风险" width="60">
-        <template #default="{ row }">
-          <el-tag :type="row.risk_level==='high'?'danger':row.risk_level==='medium'?'warning':'info'" size="small">
-            {{ row.risk_level === 'high' ? '高' : row.risk_level === 'medium' ? '中' : '低' }}
-          </el-tag>
-        </template>
-      </el-table-column>
-      <el-table-column prop="summary" label="摘要" min-width="200" show-overflow-tooltip />
-    </el-table>
+    </section>
   </div>
 </template>
 
 <style scoped>
-.audit { padding: 24px; }
-.audit-header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 16px; flex-wrap: wrap; gap: 8px; }
-.audit-header h2 { font-size: 18px; margin: 0; }
-.filters { display: flex; gap: 8px; }
+.mobile-label { display:none; }
+@media(max-width:740px) { .mobile-label { display:block; margin-bottom:2px; font-size:11px; } }
+.log-tabs,.filters,.audit-panel footer{display:flex;align-items:center;flex-wrap:wrap;gap:12px}.log-tabs{border-bottom:1px solid var(--line);gap:20px}.log-tabs button{background:none;border:0;border-bottom:2px solid transparent;padding:4px 0 10px;color:var(--muted);font:inherit;font-size:14px}.log-tabs button[aria-pressed="true"]{border-color:#38734f;color:#2b6846;font-weight:650}.filters{margin:15px 0}.filters .el-input{max-width:240px}.filters .el-select{width:132px}.log-grid{display:grid;grid-template-columns:minmax(140px,2fr) minmax(75px,.75fr) minmax(120px,1.15fr) minmax(128px,.95fr);gap:14px;align-items:center}.headings{color:var(--muted);font-size:12px;background:#f2f6f1;padding:8px 10px;border-radius:7px}.log-row{font-size:13px;border-bottom:1px solid var(--line);padding:13px 10px;overflow-wrap:anywhere}.log-row strong{font-size:14px}.log-row small,.log-row time,.audit-panel footer{color:var(--muted);font-size:12px}.log-row small{display:block;margin-top:3px}.log-row time{font-variant-numeric:tabular-nums}.failed{font-size:11px;color:#974238;margin-left:6px}.audit-panel footer{justify-content:space-between;margin-top:12px}
+@media(max-width:740px){.headings{display:none}.log-grid.log-row{grid-template-columns:minmax(0,1fr) minmax(105px,.8fr);padding:15px 0;gap:10px}.filters .el-input{width:100%;max-width:none}.log-tabs{gap:11px}.log-tabs button{font-size:13px}}
 </style>

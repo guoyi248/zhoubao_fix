@@ -32,6 +32,8 @@ class AnalysisRun(BaseModel):
 
     class Meta:
         db_table = "analysis_runs"
+        constraints = [models.UniqueConstraint(fields=["revision"], condition=models.Q(status__in=["queued", "running"]),
+                                               name="one_active_analysis_per_revision")]
         verbose_name = "分析运行"
         verbose_name_plural = "分析运行"
 

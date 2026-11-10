@@ -110,8 +110,9 @@ api.interceptors.response.use(
     }
 
     // 401 → 跳转登录
-    if (error.response?.status === 401 && window.location.pathname !== "/login") {
-      window.location.href = "/login";
+    if (detail?.code === "LOGIN_REQUIRED" && originalRequest.url !== "/me/"
+        && !["/login", "/activate"].includes(window.location.pathname)) {
+      window.location.replace("/login");
     }
 
     // 提取业务错误消息

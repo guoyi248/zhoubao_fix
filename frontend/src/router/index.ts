@@ -3,6 +3,7 @@
  * /login 不需要鉴权，其余路由均需登录。
  */
 import { createRouter, createWebHistory } from "vue-router";
+import { useUserStore } from "@/stores/user";
 
 const routes = [
   {
@@ -36,6 +37,11 @@ const routes = [
     name: "private-plans",
     component: () => import("@/views/member/PrivatePlansView.vue"),
   },
+  { path: "/reminders", name: "reminders", component: () => import("@/views/member/RemindersView.vue") },
+  { path: "/analysis", name: "analysis", component: () => import("@/views/member/AnalysisView.vue") },
+  { path: "/knowledge", name: "knowledge", component: () => import("@/views/member/KnowledgeBaseView.vue") },
+  { path: "/admin/presentation", name: "presentation", component: () => import("@/views/admin/MeetingModeView.vue") },
+  { path: "/admin/settings", name: "system-settings", component: () => import("@/views/admin/SystemSettingsView.vue") },
   // ── 管理员 ────────────────────────────────────────────
   {
     path: "/admin/reports",
@@ -62,6 +68,19 @@ const routes = [
 const router = createRouter({
   history: createWebHistory(),
   routes,
+  scrollBehavior(to, from, savedPosition) {
+    if (savedPosition) return savedPosition;
+    if (to.path !== from.path && !to.hash) return { top: 0 };
+  },
+});
+
+router.beforeEach(async (to) => {
+  if (to.name === "login" || to.name === "activate") return;
+  const store = useUserStore();
+  const adminPage = to.path.startsWith("/admin/");
+  if (!store.isAuthenticated || adminPage) await store.fetchMe();
+  if (!store.isAuthenticated) return { name: "login", query: { next: to.fullPath }, replace: true };
+  if (adminPage && !store.isAdmin) return { name: "dashboard", replace: true };
 });
 
 export default router;

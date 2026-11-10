@@ -7,10 +7,10 @@ import { ref, computed } from "vue";
 import api from "@/utils/api";
 
 export interface UserInfo {
-  id: string;
+  id: number;
   username: string;
   display_name: string;
-  role: "member" | "admin" | "super_admin";
+  role: "member" | "admin";
   department_name: string;
   totp_enabled: boolean;
 }
@@ -20,13 +20,12 @@ export const useUserStore = defineStore("user", () => {
   const loading = ref(false);
 
   const isAuthenticated = computed(() => user.value !== null);
-  const isAdmin = computed(() => user.value?.role === "admin" || user.value?.role === "super_admin");
-  const isSuperAdmin = computed(() => user.value?.role === "super_admin");
+  const isAdmin = computed(() => user.value?.role === "admin");
 
   async function fetchMe() {
     loading.value = true;
     try {
-      const { data } = await api.get<UserInfo>("/me");
+      const { data } = await api.get<UserInfo>("/me/");
       user.value = data;
     } catch {
       user.value = null;
@@ -59,7 +58,6 @@ export const useUserStore = defineStore("user", () => {
     loading,
     isAuthenticated,
     isAdmin,
-    isSuperAdmin,
     fetchMe,
     login,
     logout,

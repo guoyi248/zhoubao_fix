@@ -1,6 +1,7 @@
 """组会序列化器。"""
 
 from rest_framework import serializers
+from accounts.models import User
 from .models import (
     Meeting,
     MeetingReportSnapshot,
@@ -19,6 +20,7 @@ class ActionItemSerializer(serializers.ModelSerializer):
         fields = [
             "id",
             "title",
+            "source_report_id",
             "owner_id",
             "owner_name",
             "due_date",
@@ -33,14 +35,16 @@ class ActionItemSerializer(serializers.ModelSerializer):
 
 class CreateActionItemSerializer(serializers.Serializer):
     title = serializers.CharField(max_length=500)
-    owner_id = serializers.UUIDField(required=False, allow_null=True)
+    owner_id = serializers.PrimaryKeyRelatedField(source="owner", queryset=User.objects.active(),
+                                                  required=False, allow_null=True)
     due_date = serializers.DateField(required=False, allow_null=True)
     source_report_id = serializers.UUIDField(required=False, allow_null=True)
 
 
 class UpdateActionItemSerializer(serializers.Serializer):
     title = serializers.CharField(max_length=500, required=False)
-    owner_id = serializers.UUIDField(required=False, allow_null=True)
+    owner_id = serializers.PrimaryKeyRelatedField(source="owner", queryset=User.objects.active(),
+                                                  required=False, allow_null=True)
     due_date = serializers.DateField(required=False, allow_null=True)
     status = serializers.ChoiceField(
         choices=["open", "in_progress", "done", "cancelled"],
@@ -53,6 +57,7 @@ class ReportSnapshotSerializer(serializers.ModelSerializer):
     member_name = serializers.CharField(source="member.display_name")
     member_department = serializers.CharField(source="member.department.name", default="")
     report_id = serializers.UUIDField(source="report_revision.report_id", read_only=True)
+    revision_no = serializers.IntegerField(source="report_revision.revision_no", read_only=True)
     confirmed_pdf_attachment_id = serializers.UUIDField(source="report_revision.confirmed_pdf_attachment_id", read_only=True, allow_null=True)
     structured_content = serializers.JSONField(source="report_revision.structured_content_json", read_only=True)
 
@@ -64,6 +69,7 @@ class ReportSnapshotSerializer(serializers.ModelSerializer):
             "member_name",
             "member_department",
             "report_revision_id",
+            "revision_no",
             "report_id",
             "confirmed_pdf_attachment_id",
             "structured_content",
@@ -72,6 +78,7 @@ class ReportSnapshotSerializer(serializers.ModelSerializer):
 
 
 class MeetingDetailSerializer(serializers.ModelSerializer):
+    period_label = serializers.CharField(source="reporting_period", read_only=True)
     created_by_name = serializers.CharField(source="created_by.display_name", read_only=True)
     snapshots = serializers.SerializerMethodField()
     report_states = serializers.SerializerMethodField()
@@ -84,6 +91,7 @@ class MeetingDetailSerializer(serializers.ModelSerializer):
             "reporting_period_id",
             "status",
             "created_by_name",
+            "period_label",
             "member_order_json",
             "started_at",
             "ended_at",
@@ -139,7 +147,7 @@ class MeetingListSerializer(serializers.ModelSerializer):
 
 class MarkDiscussedSerializer(serializers.Serializer):
     discussed = serializers.BooleanField(default=True)
-    note = serializers.CharField(required=False, allow_blank=True, default="")
+    note = serializers.CharField(required=False, allow_blank=True)
 
 
 class RefreshSnapshotSerializer(serializers.Serializer):

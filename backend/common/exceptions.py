@@ -7,7 +7,7 @@ import uuid
 import logging
 
 from rest_framework.views import exception_handler as drf_exception_handler
-from rest_framework.exceptions import APIException
+from rest_framework.exceptions import APIException, NotAuthenticated
 from django.http import JsonResponse
 
 logger = logging.getLogger(__name__)
@@ -68,6 +68,28 @@ class FileTypeMismatchError(WeeklyReportError):
     default_detail = "文件类型与扩展名不匹配"
 
 
+class FileTypeNotAllowed(WeeklyReportError):
+    default_code = "FILE_TYPE_NOT_ALLOWED"
+    default_detail = "不支持的文件类型"
+
+
+class AttachmentLimitError(WeeklyReportError):
+    default_code = "ATTACHMENT_LIMIT"
+    default_detail = "周报附件超出限制"
+
+
+class AttachmentLockedError(WeeklyReportError):
+    status_code = 409
+    default_code = "ATTACHMENT_LOCKED"
+    default_detail = "这个附件已包含在提交记录中，请在更正周报时替换文件"
+
+
+class ScanUnavailableError(WeeklyReportError):
+    status_code = 503
+    default_code = "SCAN_UNAVAILABLE"
+    default_detail = "文件扫描服务暂不可用，请稍后重试"
+
+
 class MalwareDetectedError(WeeklyReportError):
     status_code = 400
     default_code = "MALWARE_DETECTED"
@@ -119,7 +141,9 @@ def api_exception_handler(exc, context):
             status=500,
         )
 
-    if isinstance(exc, WeeklyReportError):
+    if isinstance(exc, NotAuthenticated):
+        response.data = {"code": "LOGIN_REQUIRED", "message": "请重新登录", "request_id": request_id}
+    elif isinstance(exc, WeeklyReportError):
         response.data = {
             "code": exc.default_code,
             "message": str(exc.detail),

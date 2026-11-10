@@ -30,7 +30,7 @@ def admin(department):
         username="admin",
         password="Admin123!",
         display_name="管理员",
-        role=UserRole.SUPER_ADMIN,
+        role=UserRole.ADMIN,
         account_status=AccountStatus.ACTIVE,
         department=department,
     )
@@ -170,8 +170,15 @@ class TestMeetingLifecycle:
         )
         assert resp.status_code == 200
         assert resp.json()["discussed"] is True
+        detail = admin_client.get(f"/api/v1/admin/meetings/{meeting_id}").json()
+        report_id = detail["snapshots"][0]["report_id"]
+        assert detail["report_states"][report_id]["discussed"]
+        admin_client.patch(f"/api/v1/admin/meetings/{meeting_id}/reports/{snapshot_id}",
+                           {"discussed": False}, content_type="application/json")
+        state = admin_client.get(f"/api/v1/admin/meetings/{meeting_id}").json()["report_states"][report_id]
+        assert state == {"discussed": False, "discussed_at": None, "note": "进展正常"}
 
-    def test_action_item_crud(self, admin_client, period_with_reports):
+    def test_action_item_crud(self, admin_client, period_with_reports, member):
         """行动项创建和更新。"""
         create_resp = admin_client.post(
             "/api/v1/admin/meetings/",
@@ -183,12 +190,13 @@ class TestMeetingLifecycle:
         # 创建行动项
         item_resp = admin_client.post(
             f"/api/v1/admin/meetings/{meeting_id}/action-items",
-            {"title": "张三需要在周五前完成性能测试"},
+            {"title": "张三需要在周五前完成性能测试", "owner_id": member.pk},
             content_type="application/json",
         )
         assert item_resp.status_code == 201
         item_id = item_resp.json()["id"]
         assert item_resp.json()["status"] == "open"
+        assert item_resp.json()["owner_id"] == member.pk
 
         # 更新行动项
         update_resp = admin_client.patch(

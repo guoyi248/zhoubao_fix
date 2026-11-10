@@ -6,6 +6,7 @@ from . import views
 app_name = "reporting_admin"
 
 urlpatterns = [
+    path("overview", views.admin_week_overview, name="week-overview"),
     path("", views.admin_list_reports, name="list-reports"),
     path("<uuid:report_id>", views.admin_get_report, name="get-report"),
     path("<uuid:report_id>/revisions/<uuid:revision_id>", views.admin_get_revision, name="get-revision"),

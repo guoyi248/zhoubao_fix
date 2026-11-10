@@ -2,10 +2,12 @@
 
 from django.urls import path
 from . import views
+from .pet_chat import pet_chat
 
 app_name = "analysis"
 
 urlpatterns = [
+    path("pet/chat", pet_chat, name="pet-chat"),
     # 人工修订（全局端点）
     path("analysis/items/<uuid:item_id>", views.update_analysis_item, name="update-item"),
     path("analysis/items/<uuid:item_id>/confirm", views.confirm_analysis_item, name="confirm-item"),

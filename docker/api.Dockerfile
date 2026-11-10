@@ -12,6 +12,7 @@ RUN sed -i 's/deb.debian.org/mirrors.tuna.tsinghua.edu.cn/g' /etc/apt/sources.li
  && apt-get install -y --no-install-recommends \
       libpq5 \
       libmagic1 \
+      fonts-noto-cjk \
       ca-certificates \
       curl \
     && rm -rf /var/lib/apt/lists/*
@@ -23,8 +24,8 @@ WORKDIR /app
 ARG PIP_INDEX_URL=https://pypi.tuna.tsinghua.edu.cn/simple
 COPY pyproject.toml .
 COPY backend/ backend/
-RUN pip install --no-cache-dir -i $PIP_INDEX_URL -e .
+RUN pip install --no-cache-dir -i $PIP_INDEX_URL -e '.[geoip]'
 
 USER app
 EXPOSE 8000
-CMD ["gunicorn", "config.wsgi:application", "--bind", "0.0.0.0:8000"]
+CMD ["gunicorn", "config.wsgi:application", "--bind", "0.0.0.0:8000", "--timeout", "180"]

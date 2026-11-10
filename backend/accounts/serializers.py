@@ -42,23 +42,42 @@ class UserProfileSerializer(serializers.ModelSerializer):
         read_only_fields = fields
 
 
-class CreateUserSerializer(serializers.Serializer):
+class AdminUserSerializer(UserProfileSerializer):
+    last_login_at = serializers.DateTimeField(source="latest_login_time", read_only=True, allow_null=True)
+    last_login_ip = serializers.IPAddressField(read_only=True, allow_null=True)
+    last_login_location = serializers.CharField(read_only=True, allow_null=True)
+
+    class Meta(UserProfileSerializer.Meta):
+        fields = [*UserProfileSerializer.Meta.fields, "last_login_ip", "last_login_location"]
+        read_only_fields = fields
+
+
+class UserFieldsSerializer(serializers.Serializer):
+    department_id = serializers.UUIDField(required=False, allow_null=True)
+
+    def validate_department_id(self, value):
+        from organizations.models import Department
+        if value and not Department.objects.filter(pk=value).exists():
+            raise serializers.ValidationError("部门不存在")
+        return value
+
+
+class CreateUserSerializer(UserFieldsSerializer):
     username = serializers.CharField(max_length=150)
     display_name = serializers.CharField(max_length=150)
     email = serializers.EmailField(required=False, allow_blank=True, default="")
-    department_id = serializers.UUIDField(required=False, allow_null=True)
     role = serializers.ChoiceField(
-        choices=[("member", "普通成员"), ("admin", "业务管理员")],
+        choices=UserRole.choices,
         default="member",
     )
 
 
-class UpdateUserSerializer(serializers.Serializer):
+class UpdateUserSerializer(UserFieldsSerializer):
+    username = serializers.CharField(max_length=150, required=False)
     display_name = serializers.CharField(max_length=150, required=False)
-    email = serializers.EmailField(required=False)
-    department_id = serializers.UUIDField(required=False, allow_null=True)
+    email = serializers.EmailField(required=False, allow_blank=True)
     role = serializers.ChoiceField(
-        choices=[("member", "普通成员"), ("admin", "业务管理员")],
+        choices=UserRole.choices,
         required=False,
     )
 

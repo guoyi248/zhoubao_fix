@@ -6,6 +6,7 @@ from . import views
 app_name = "analysis_reports"
 
 urlpatterns = [
+    path("analysis-service", views.analysis_service, name="analysis-service"),
     # 查看 + 重新生成
     path("<uuid:revision_id>/analysis", views.get_analysis, name="get-analysis"),
     path("<uuid:revision_id>/analysis/regenerate", views.regenerate_analysis, name="regenerate-analysis"),

@@ -7,11 +7,12 @@
 - AttachmentExtractedText：抽取文本
 """
 
-import uuid
-
 from django.conf import settings
 from django.db import models
+from django.utils.functional import cached_property
 from common.models import BaseModel
+
+from .mime_utils import is_pdf
 
 
 class AttachmentStatus(models.TextChoices):
@@ -32,6 +33,13 @@ class AttachmentStatus(models.TextChoices):
     FAILED = "failed", "失败"
     PASSWORD_PROTECTED = "password_protected", "有密码保护"
     UNSUPPORTED = "unsupported", "不支持"
+
+
+PDF_AVAILABLE_STATES = {
+    AttachmentStatus.PREVIEW_READY, AttachmentStatus.PREVIEW_WARNING, AttachmentStatus.USER_CONFIRMED,
+    AttachmentStatus.EXTRACTING, AttachmentStatus.ANALYZING, AttachmentStatus.READY,
+    AttachmentStatus.READY_WITH_WARNING,
+}
 
 
 class Attachment(BaseModel):
@@ -60,6 +68,7 @@ class Attachment(BaseModel):
 
     # 文件元数据
     original_filename = models.CharField("原始文件名", max_length=500)
+    uploaded_filename = models.CharField("上传时的文件名", max_length=255, blank=True, default="")
     safe_filename = models.CharField("安全文件名", max_length=500)
     detected_mime = models.CharField("检测的 MIME", max_length=255)
     source_sha256 = models.CharField("原件 SHA-256", max_length=64)
@@ -67,6 +76,7 @@ class Attachment(BaseModel):
 
     # 对象存储
     original_object_key = models.CharField("原件对象键", max_length=500, blank=True, default="")
+    is_current = models.BooleanField("在当前附件列表中", default=True)
 
     # 状态机
     status = models.CharField(
@@ -97,6 +107,24 @@ class Attachment(BaseModel):
 
     def __str__(self):
         return self.original_filename
+
+    @cached_property
+    def ready_preview(self):
+        if hasattr(self, "ready_previews"):
+            return next(iter(self.ready_previews), None)
+        return self.previews.filter(status="ready").order_by("-created_at", "-id").first()
+
+    @property
+    def pdf_source(self):
+        """返回可展示 PDF 的存储桶及对象键，兼容直接上传的旧 PDF。"""
+        if self.status not in PDF_AVAILABLE_STATES:
+            return None
+        if is_pdf(self.detected_mime) and self.original_object_key:
+            return settings.S3_BUCKET_ORIGINALS, self.original_object_key
+        preview = self.ready_preview
+        if preview:
+            return settings.S3_BUCKET_PREVIEWS, preview.preview_object_key
+        return None
 
 
 class AttachmentProcessingEvent(BaseModel):

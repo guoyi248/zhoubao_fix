@@ -2,21 +2,23 @@
 对象存储适配器。优先 S3/MinIO，不可用时自动回退到本地文件。
 """
 
-import io
 import hashlib
 import logging
-import os
 import shutil
+from contextlib import closing
 from pathlib import Path
+from tempfile import TemporaryDirectory
 from typing import BinaryIO
 
 import boto3
 from botocore.config import Config
+from botocore.exceptions import ClientError
 from django.conf import settings
+from common.exceptions import ObjectNotFound
 
 logger = logging.getLogger(__name__)
 
-LOCAL_ROOT = Path(settings.BASE_DIR) / "media"  # noqa: F405
+LOCAL_ROOT = Path(settings.MEDIA_ROOT or Path(settings.BASE_DIR) / "media")
 
 
 class LocalStorage:
@@ -41,12 +43,15 @@ class LocalStorage:
         return {"sha256": sha.hexdigest(), "size": size}
 
     def download_to_bytes(self, bucket: str, object_key: str) -> bytes:
-        path = LOCAL_ROOT / object_key
-        return path.read_bytes()
+        with self.generate_download_stream(bucket, object_key) as stream:
+            return stream.read()
 
     def generate_download_stream(self, bucket: str, object_key: str):
         path = LOCAL_ROOT / object_key
-        return open(path, "rb")
+        try:
+            return path.open("rb")
+        except FileNotFoundError as exc:
+            raise ObjectNotFound(detail="存储中找不到此文件，请重新上传或从备份恢复") from exc
 
     def generate_presigned_url(self, bucket: str, object_key: str, ttl: int = None) -> str:
         return f"/media/{object_key}"
@@ -68,10 +73,14 @@ class LocalStorage:
     def put_object(self, Bucket, Key, Body, ContentType=""):
         path = LOCAL_ROOT / Key
         path.parent.mkdir(parents=True, exist_ok=True)
-        if isinstance(Body, str):
-            path.write_text(Body)
-        else:
-            path.write_bytes(Body)
+        # 两个任务可能生成相同哈希的 PDF，读者应始终读到完整的文件。
+        with TemporaryDirectory(dir=path.parent) as folder:
+            pending = Path(folder) / "object"
+            if isinstance(Body, str):
+                pending.write_text(Body)
+            else:
+                pending.write_bytes(Body)
+            pending.replace(path)
 
     def get_object(self, Bucket, Key):
         class Response:
@@ -133,10 +142,16 @@ class S3Storage:
         return {"sha256": sha.hexdigest(), "size": size}
 
     def download_to_bytes(self, bucket, object_key):
-        return self.client.get_object(Bucket=bucket, Key=object_key)["Body"].read()
+        with closing(self.generate_download_stream(bucket, object_key)) as stream:
+            return stream.read()
 
     def generate_download_stream(self, bucket, object_key):
-        return self.client.get_object(Bucket=bucket, Key=object_key)["Body"]
+        try:
+            return self.client.get_object(Bucket=bucket, Key=object_key)["Body"]
+        except ClientError as exc:
+            if exc.response["Error"]["Code"] in {"NoSuchKey", "NotFound", "404"}:
+                raise ObjectNotFound(detail="存储中找不到此文件，请重新上传或从备份恢复") from exc
+            raise
 
     def delete_object(self, bucket, object_key):
         self.client.delete_object(Bucket=bucket, Key=object_key)
@@ -152,4 +167,4 @@ class S3Storage:
         self.client.copy_object(Bucket=dst_bucket, Key=dst_key, CopySource={"Bucket": src_bucket, "Key": src_key})
 
 
-storage = S3Storage()
+storage = LocalStorage() if getattr(settings, "USE_LOCAL_STORAGE", False) else S3Storage()

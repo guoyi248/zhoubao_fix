@@ -29,13 +29,8 @@ app.conf.task_default_routing_key = "default"
 # ── 任务路由 ──────────────────────────────────────────────
 
 app.conf.task_routes = {
-    "attachments.tasks.scan.*": {"queue": "preview"},
-    "attachments.tasks.convert.*": {"queue": "preview"},
-    "attachments.tasks.extract.*": {"queue": "preview"},
-    "attachments.tasks.thumbnail.*": {"queue": "preview"},
-    "attachments.tasks.compatibility.*": {"queue": "preview"},
+    "attachments.tasks.*": {"queue": "preview"},
     "analysis.tasks.*": {"queue": "ai"},
-    "analysis.tasks.rebuild_team_summary": {"queue": "ai"},
 }
 
 # ── 重试策略 ──────────────────────────────────────────────
@@ -43,13 +38,3 @@ app.conf.task_routes = {
 app.conf.task_acks_late = True
 app.conf.task_reject_on_worker_lost = True
 app.conf.task_track_started = True
-
-# AI 任务指数退避
-app.conf.task_annotations = {
-    "analysis.tasks.analyze_report": {
-        "max_retries": 3,
-        "default_retry_delay": 60,
-        "retry_backoff": True,
-        "autoretry_for": (Exception,),
-    },
-}

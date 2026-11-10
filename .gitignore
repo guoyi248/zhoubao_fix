@@ -11,6 +11,7 @@ venv/
 *.sqlite3
 /backend/staticfiles/
 /media/
+/backend/config/media/
 
 # ── Node ───────────────────────────────────────────────
 node_modules/

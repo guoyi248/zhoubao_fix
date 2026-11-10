@@ -13,6 +13,7 @@ urlpatterns = [
     # 详情 + 预览 + 下载
     path("<uuid:attachment_id>", views.get_attachment_detail, name="attachment-detail"),
     path("<uuid:attachment_id>/preview-content", views.get_preview_content, name="preview-content"),
+    path("<uuid:attachment_id>/presentation-pages/<int:page>", views.presentation_page, name="presentation-page"),
     path("<uuid:attachment_id>/download", views.download_original, name="download-original"),
     path("<uuid:attachment_id>/compatibility", views.get_compatibility, name="compatibility"),
 

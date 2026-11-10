@@ -21,14 +21,18 @@ dependencies = [
     "django-otp>=1.6,<2.0",
     "gunicorn>=23.0,<24.0",
     "requests>=2.32,<3.0",
+    "cryptography>=44,<50",
     "python-magic>=0.4,<1.0",
     "fpdf2>=2.8,<3.0",
     "python-docx>=1.1,<2.0",
+    "omml2latex==0.1.1",
+    "ziamath>=0.13,<0.14",
     "openpyxl>=3.1,<4.0",
     "python-pptx>=1.0,<2.0",
 ]
 
 [project.optional-dependencies]
+geoip = ["geoip2>=5,<6"]
 dev = [
     "pytest>=8.3,<9.0",
     "pytest-django>=4.10,<5.0",
@@ -46,7 +50,7 @@ where = ["backend"]
 DJANGO_SETTINGS_MODULE = "config.settings.test"
 pythonpath = ["backend"]
 testpaths = ["backend"]
-addopts = "--tb=short --strict-markers"
+addopts = "--tb=short --strict-markers --import-mode=importlib"
 markers = [
     "slow: marks tests as slow",
     "integration: marks tests as integration tests",

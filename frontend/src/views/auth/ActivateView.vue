@@ -1,5 +1,6 @@
 <script setup lang="ts">
 /** 账号激活页面——通过一次性令牌设置密码。 */
+import AuthFrame from "@/components/AuthFrame.vue";
 import { ref } from "vue";
 import { useRoute, useRouter } from "vue-router";
 import api from "@/utils/api";
@@ -13,6 +14,7 @@ const password = ref("");
 const loading = ref(false);
 
 async function handleActivate() {
+  if (loading.value || !token.value || password.value.length < 8) return;
   loading.value = true;
   try {
     await api.post("/auth/activate", { token: token.value, password: password.value });
@@ -25,33 +27,17 @@ async function handleActivate() {
   }
 }
 </script>
-
 <template>
-  <div class="activate-container">
-    <el-card class="activate-card">
-      <template #header><h2>激活账号</h2></template>
-      <el-form @submit.prevent="handleActivate">
-        <el-form-item label="设置密码">
-          <el-input v-model="password" type="password" show-password />
-        </el-form-item>
-        <el-form-item>
-          <el-button type="primary" :loading="loading" native-type="submit" style="width: 100%">
-            激活并设置密码
-          </el-button>
-        </el-form-item>
-      </el-form>
-    </el-card>
-  </div>
+  <AuthFrame>
+    <h1 id="auth-title">激活账号</h1>
+    <el-form label-position="top" @submit.prevent="handleActivate">
+      <el-form-item label="设置密码">
+        <el-input v-model="password" type="password" autocomplete="new-password" show-password placeholder="至少 8 位字符" />
+      </el-form-item>
+      <el-alert v-if="!token" type="warning" :closable="false" title="请从管理员发给你的完整激活链接进入。" />
+      <el-form-item>
+        <el-button type="primary" native-type="submit" :disabled="!token || password.length < 8" :loading="loading">激活账号</el-button>
+      </el-form-item>
+    </el-form>
+  </AuthFrame>
 </template>
-
-<style scoped>
-.activate-container {
-  display: flex;
-  justify-content: center;
-  align-items: center;
-  min-height: 100vh;
-}
-.activate-card {
-  width: 420px;
-}
-</style>

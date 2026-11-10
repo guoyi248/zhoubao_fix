@@ -18,10 +18,16 @@ class AuditEvent(models.Model):
         USER_CREATED = "USER_CREATED", "创建用户"
         USER_DISABLED = "USER_DISABLED", "禁用用户"
         USER_ENABLED = "USER_ENABLED", "恢复用户"
+        USER_UPDATED = "USER_UPDATED", "修改用户"
+        USER_DELETED = "USER_DELETED", "删除用户"
         ROLE_CHANGED = "ROLE_CHANGED", "角色变更"
         PASSWORD_RESET = "PASSWORD_RESET", "密码重置"
         REPORT_SUBMITTED = "REPORT_SUBMITTED", "周报提交"
-        REPORT_RESUBMITTED = "REPORT_RESUBMITTED", "周报补交"
+        REPORT_RESUBMITTED = "REPORT_RESUBMITTED", "更正周报"
+        DRAFT_UPDATED = "DRAFT_UPDATED", "保存周报草稿"
+        REPORT_REOPENED = "REPORT_REOPENED", "开始更正周报"
+        ATTACHMENT_REPLACED = "ATTACHMENT_REPLACED", "替换周报附件"
+        ATTACHMENT_REMOVED = "ATTACHMENT_REMOVED", "移除周报附件"
         REPORT_VIEWED_BY_ADMIN = "REPORT_VIEWED_BY_ADMIN", "管理员查看周报"
         ATTACHMENT_UPLOADED = "ATTACHMENT_UPLOADED", "附件上传"
         ATTACHMENT_DOWNLOADED = "ATTACHMENT_DOWNLOADED", "附件下载"
@@ -50,6 +56,7 @@ class AuditEvent(models.Model):
         related_name="audit_events",
     )
     actor_ip = models.GenericIPAddressField("操作人 IP", null=True, blank=True)
+    actor_location = models.CharField("来源地点", max_length=160, blank=True, default="")
     actor_user_agent = models.TextField("User-Agent 摘要", blank=True, default="")
 
     # 操作对象

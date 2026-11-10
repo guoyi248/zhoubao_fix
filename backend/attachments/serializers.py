@@ -3,35 +3,48 @@
 from rest_framework import serializers
 from .models import (
     Attachment,
-    AttachmentStatus,
-    AttachmentProcessingEvent,
     AttachmentCompatibilityReport,
-    AttachmentPreview,
     AttachmentExtractedText,
 )
 
 
 class AttachmentStatusSerializer(serializers.ModelSerializer):
-    """附件状态（轻量，供轮询使用）。"""
+    """草稿附件列表及预览状态。"""
+
+    preview_status = serializers.SerializerMethodField()
 
     class Meta:
         model = Attachment
         fields = [
             "id",
             "original_filename",
+            "uploaded_filename",
             "status",
             "detected_mime",
             "file_size_bytes",
+            "preview_status",
             "retry_count",
             "updated_at",
         ]
 
+    def get_preview_status(self, obj):
+        if not obj.pdf_source:
+            return None
+        preview = obj.ready_preview
+        if not preview:
+            return {"available": True, "page_count": None, "converter_name": "原始 PDF", "converter_version": ""}
+        return {
+            "available": True,
+            "page_count": preview.page_count,
+            "converter_name": preview.converter_name,
+            "converter_version": preview.converter_version,
+        }
 
-class AttachmentDetailSerializer(serializers.ModelSerializer):
+
+class AttachmentDetailSerializer(AttachmentStatusSerializer):
     """附件详情（含兼容性报告和预览状态）。"""
 
     compatibility_report = serializers.SerializerMethodField()
-    preview_status = serializers.SerializerMethodField()
     extracted_summary = serializers.SerializerMethodField()
 
     class Meta:
@@ -39,6 +52,7 @@ class AttachmentDetailSerializer(serializers.ModelSerializer):
         fields = [
             "id",
             "original_filename",
+            "uploaded_filename",
             "safe_filename",
             "detected_mime",
             "file_size_bytes",
@@ -66,17 +80,6 @@ class AttachmentDetailSerializer(serializers.ModelSerializer):
             "legacy_format": report.legacy_format,
             "preview_level": report.preview_level,
             "warnings": report.warnings,
-        }
-
-    def get_preview_status(self, obj):
-        preview = AttachmentPreview.objects.filter(attachment=obj).first()
-        if not preview:
-            return None
-        return {
-            "available": True,
-            "page_count": preview.page_count,
-            "converter_name": preview.converter_name,
-            "converter_version": preview.converter_version,
         }
 
     def get_extracted_summary(self, obj):

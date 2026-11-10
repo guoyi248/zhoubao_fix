@@ -1,7 +1,34 @@
 # ── 生产环境 ──
 name: weekly-report
 
+x-background: &background
+  restart: unless-stopped
+  env_file: ./config/app.env
+  volumes:
+    - ../backend:/app/backend:ro
+    - ./secrets/django:/run/secrets/weekly-django:ro
+  networks: [backend]
+  extra_hosts:
+    - "host.docker.internal:host-gateway"
+  depends_on:
+    postgres:
+      condition: service_healthy
+    redis:
+      condition: service_healthy
+
 services:
+  worker:
+    <<: *background
+    build:
+      context: ..
+      dockerfile: docker/worker.Dockerfile
+    command: celery -A config worker -Q default,preview,ai --concurrency=2 --loglevel=INFO
+
+  scheduler:
+    <<: *background
+    image: weekly-report-api:local
+    command: celery -A config beat --schedule=/tmp/weekly-beat --loglevel=INFO
+
   nginx:
     build:
       context: ..
@@ -17,6 +44,7 @@ services:
       - backend
 
   api:
+    image: weekly-report-api:local
     build:
       context: ..
       dockerfile: docker/api.Dockerfile
@@ -25,8 +53,13 @@ services:
     restart: unless-stopped
     env_file:
       - ./config/app.env
+    environment:
+      AUDIT_TRUSTED_PROXY_HOSTS: ${AUDIT_TRUSTED_PROXY_HOSTS:-nginx}
     volumes:
       - ../backend:/app/backend:ro
+      - ./secrets/django:/run/secrets/weekly-django:ro
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
     networks:
       - backend
       - frontend
@@ -44,8 +77,6 @@ services:
   postgres:
     image: postgres:17-bookworm
     restart: unless-stopped
-    ports:
-      - "5432:5432"
     environment:
       POSTGRES_DB: weekly_report
       POSTGRES_USER: weekly_app
@@ -65,8 +96,6 @@ services:
   redis:
     image: redis:7-alpine
     restart: unless-stopped
-    ports:
-      - "6379:6379"
     command: redis-server --appendonly yes
     volumes:
       - ../data/redis:/data
@@ -81,12 +110,14 @@ services:
   minio:
     image: minio/minio:latest
     restart: unless-stopped
-    ports:
-      - "9100:9000"
+    profiles: ["bundled-storage"]
     command: server /data --console-address ":9001"
     environment:
-      MINIO_ROOT_USER: hjy
-      MINIO_ROOT_PASSWORD: hjy12345678
+      MINIO_ROOT_USER_FILE: /run/secrets/minio_root_user
+      MINIO_ROOT_PASSWORD_FILE: /run/secrets/minio_root_password
+    secrets:
+      - minio_root_user
+      - minio_root_password
     volumes:
       - ../data/minio:/data
     networks:
@@ -95,8 +126,6 @@ services:
   clamav:
     image: clamav/clamav:latest
     restart: unless-stopped
-    ports:
-      - "3310:3310"
     volumes:
       - ../data/clamav:/var/lib/clamav
     networks:
@@ -104,9 +133,8 @@ services:
 
   gotenberg:
     image: gotenberg/gotenberg:8
+    command: ["gotenberg", "--api-timeout=120s"]
     restart: unless-stopped
-    ports:
-      - "3000:3000"
     networks:
       - backend
 
@@ -117,3 +145,7 @@ networks:
 secrets:
   postgres_password:
     file: ./secrets/postgres_password
+  minio_root_user:
+    file: ./secrets/minio_root_user
+  minio_root_password:
+    file: ./secrets/minio_root_password

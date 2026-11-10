@@ -6,18 +6,17 @@
 - extract_text: PyMuPDF 文本抽取
 """
 
-import hashlib
 import logging
-import subprocess
-import tempfile
-import uuid
-from pathlib import Path
+from contextlib import closing
 
 from celery import shared_task
 from django.conf import settings
+from django.db import transaction
 from django.utils import timezone
 
+from common.exceptions import MalwareDetectedError, ScanUnavailableError
 from common.storage import storage
+from .scanning import scan_stream
 from .models import (
     Attachment,
     AttachmentStatus,
@@ -69,38 +68,10 @@ def scan_file(self, attachment_id: str):
     _record_event(attachment, AttachmentStatus.SCANNING)
 
     try:
-        import socket
-        sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-        sock.settimeout(30)
-        sock.connect((settings.CLAMAV_HOST, settings.CLAMAV_PORT))
-
-        # 从 MinIO 读取文件传给 ClamAV
-        file_bytes = storage.download_to_bytes(
-            settings.S3_BUCKET_ORIGINALS, attachment.original_object_key
-        )
-
-        # INSTREAM 协议
-        sock.sendall(b"nINSTREAM\n")
-        import struct
-        while file_bytes:
-            chunk = file_bytes[:8192]
-            file_bytes = file_bytes[8192:]
-            sock.sendall(struct.pack("!I", len(chunk)) + chunk)
-        sock.sendall(struct.pack("!I", 0))  # 结束标记
-
-        response = sock.recv(4096).decode().strip()
-        sock.close()
-
-        if "FOUND" in response:
-            virus_name = response.split("FOUND")[-1].strip() if "FOUND" in response else "unknown"
-            _record_event(
-                attachment,
-                AttachmentStatus.REJECTED,
-                error_code="MALWARE_DETECTED",
-                user_message=f"文件安全扫描未通过",
-                tech_diagnostic={"virus": virus_name},
-            )
-            return
+        with closing(storage.generate_download_stream(
+            settings.S3_BUCKET_ORIGINALS, attachment.original_object_key,
+        )) as stream:
+            scan_stream(stream)
 
         # 扫描通过 → 进入兼容性检测
         _record_event(attachment, AttachmentStatus.STORED)
@@ -108,22 +79,16 @@ def scan_file(self, attachment_id: str):
         # 触发兼容性检测
         compatibility_check.delay(str(attachment.id))
 
-    except (socket.error, OSError) as exc:
-        logger.warning("ClamAV unavailable for %s: %s", attachment_id, exc)
-        # ClamAV 不可用时，记录警告但仍继续处理
-        _record_event(
-            attachment,
-            AttachmentStatus.STORED,
-            error_code="CLAMAV_UNAVAILABLE",
-            user_message="病毒扫描服务暂不可用，文件已保存",
-        )
-        compatibility_check.delay(str(attachment.id))
-
+    except MalwareDetectedError:
+        _record_event(attachment, AttachmentStatus.REJECTED, error_code="MALWARE_DETECTED",
+                      user_message="文件安全扫描未通过")
     except Exception as exc:
-        logger.exception("Scan failed for %s", attachment_id)
+        code = "CLAMAV_UNAVAILABLE" if isinstance(exc, ScanUnavailableError) else "SCAN_FAILED"
+        _record_event(attachment, AttachmentStatus.QUARANTINED, error_code=code,
+                      user_message="扫描未完成，文件仍在隔离中")
         if self.request.retries < self.max_retries:
             raise self.retry(exc=exc)
-        _record_event(attachment, AttachmentStatus.FAILED, error_code="SCAN_FAILED")
+        logger.exception("Scan failed for %s", attachment_id)
 
 
 # ═══════════════════════════════════════════════════════════════
@@ -266,212 +231,87 @@ def convert_to_pdf(self, attachment_id: str):
     if attachment.status != AttachmentStatus.CONVERTING:
         return
 
-    job_id = uuid.uuid4().hex
-    input_path = Path(tempfile.gettempdir()) / f"input-{job_id}" / attachment.safe_filename
-    output_dir = Path(tempfile.gettempdir()) / f"output-{job_id}"
-    output_dir.mkdir(parents=True, exist_ok=True)
-    input_path.parent.mkdir(parents=True, exist_ok=True)
+    from .converter import convert_and_store
+    from .services import record_ready_preview
 
     try:
-        # 从 MinIO 下载原件
-        file_bytes = storage.download_to_bytes(
-            settings.S3_BUCKET_ORIGINALS, attachment.original_object_key
-        )
-        input_path.write_bytes(file_bytes)
-
-        # LibreOffice 转换
-        profile_dir = Path(tempfile.gettempdir()) / f"lo-profile-{job_id}"
-        result = subprocess.run(
-            [
-                "soffice",
-                "--headless",
-                "--nologo",
-                "--nodefault",
-                "--nolockcheck",
-                "--nofirststartwizard",
-                f"-env:UserInstallation=file://{profile_dir}",
-                "--convert-to", "pdf",
-                "--outdir", str(output_dir),
-                str(input_path),
-            ],
-            capture_output=True,
-            text=True,
-            timeout=settings.PREVIEW_TIMEOUT_SECONDS,
-        )
-
-        if result.returncode != 0:
-            raise RuntimeError(f"soffice return code={result.returncode}: {result.stderr[:500]}")
-
-        # 找到生成的 PDF
-        pdf_files = list(output_dir.glob("*.pdf"))
-        if not pdf_files:
-            raise FileNotFoundError("No PDF generated")
-
-        pdf_path = pdf_files[0]
-        pdf_bytes = pdf_path.read_bytes()
-        output_sha256 = hashlib.sha256(pdf_bytes).hexdigest()
-
-        # 上传 PDF 到 previews bucket
-        preview_key = (
-            f"previews/{attachment.original_object_key.rsplit('/', 1)[0]}/"
-            f"preview-{job_id}.pdf"
-        )
-        storage.client.put_object(
-            Bucket=settings.S3_BUCKET_PREVIEWS,
-            Key=preview_key,
-            Body=pdf_bytes,
-            ContentType="application/pdf",
-        )
-
-        # 页数检测
-        page_count = _count_pdf_pages(pdf_bytes)
-
-        # 获取转换器版本信息
-        version_result = subprocess.run(
-            ["soffice", "--version"], capture_output=True, text=True, timeout=5
-        )
-        converter_version = version_result.stdout.strip()
-
-        AttachmentPreview.objects.create(
-            attachment=attachment,
-            preview_object_key=preview_key,
-            source_sha256=attachment.source_sha256,
-            converter_name="LibreOffice",
-            converter_version=converter_version,
-            converter_image_digest="",
-            font_bundle_version="",
-            output_sha256=output_sha256,
-            page_count=page_count,
-            status="ready",
-        )
-
-        # 检查是否有字体警告
-        compat_report = AttachmentCompatibilityReport.objects.filter(
-            attachment=attachment
-        ).first()
-        has_warnings = compat_report and (compat_report.missing_or_substituted_fonts or compat_report.warnings)
-
-        if has_warnings:
-            _record_event(attachment, AttachmentStatus.PREVIEW_WARNING)
-        else:
-            _record_event(attachment, AttachmentStatus.PREVIEW_READY)
-
-    except subprocess.TimeoutExpired:
-        logger.error("Conversion timeout for %s", attachment_id)
-        _record_event(
-            attachment,
-            AttachmentStatus.FAILED,
-            error_code="OFFICE_CONVERSION_TIMEOUT",
-            user_message="文件转换超时，请尝试上传自行导出的 PDF",
-        )
-    except Exception as exc:
+        converted = convert_and_store(attachment, require_office_layout=True)
+        if not converted:
+            raise ValueError("No layout preview generated")
+        with transaction.atomic():
+            attachment = Attachment.objects.select_for_update().get(pk=attachment_id)
+            if attachment.status != AttachmentStatus.CONVERTING:
+                return
+            record_ready_preview(attachment, converted)
+            compat = AttachmentCompatibilityReport.objects.filter(attachment=attachment).first()
+            has_warnings = compat and (compat.missing_or_substituted_fonts or compat.warnings)
+            _record_event(attachment, AttachmentStatus.PREVIEW_WARNING if has_warnings else AttachmentStatus.PREVIEW_READY)
+    except Exception:
         logger.exception("Conversion failed for %s", attachment_id)
-        _record_event(
-            attachment,
-            AttachmentStatus.FAILED,
-            error_code="OFFICE_CONVERSION_FAILED",
-            user_message="文件转换失败，请下载原件或上传 PDF",
-        )
-    finally:
-        # 清理临时文件
-        import shutil
-        for d in [input_path.parent, output_dir, profile_dir]:
-            if d.exists():
-                shutil.rmtree(d, ignore_errors=True)
-
-
-def _count_pdf_pages(pdf_bytes: bytes) -> int:
-    """快速统计 PDF 页数。"""
-    import re
-    matches = re.findall(rb"/Type\s*/Page[^s]", pdf_bytes)
-    return len(matches) or 1
+        with transaction.atomic():
+            attachment = Attachment.objects.select_for_update().filter(pk=attachment_id).first()
+            if attachment and attachment.status == AttachmentStatus.CONVERTING:
+                _record_event(attachment, AttachmentStatus.FAILED, error_code="OFFICE_CONVERSION_FAILED",
+                              user_message="文件转换失败，请重试或上传从原文导出的 PDF")
 
 
 # ═══════════════════════════════════════════════════════════════
 # 4. 文本抽取（从 PDF）
 # ═══════════════════════════════════════════════════════════════
 
-@shared_task(bind=True, max_retries=1)
-def extract_text(self, attachment_id: str):
-    """从附件或 PDF 预览中抽取文本。"""
-    try:
-        attachment = Attachment.objects.get(id=attachment_id)
-    except Attachment.DoesNotExist:
-        return
+def read_attachment_text(attachment):
+    """缓存同一附件的原始文本或 PDF 文本层，供已提交的各版本复用。"""
+    from pathlib import Path
+    import fitz
 
-    try:
-        # 优先从 PDF 预览抽取
-        preview = AttachmentPreview.objects.filter(
-            attachment=attachment, status="ready"
-        ).first()
-
-        if preview and preview.preview_object_key:
-            pdf_bytes = storage.download_to_bytes(
-                settings.S3_BUCKET_PREVIEWS, preview.preview_object_key
-            )
+    cached = AttachmentExtractedText.objects.filter(attachment=attachment).first()
+    if cached and cached.content.strip() and cached.extractor_name != "error":
+        return cached.content
+    limit = 5_000_000
+    source = None
+    if attachment.detected_mime.startswith("text/") or Path(attachment.original_filename).suffix.lower() in {".txt", ".md", ".csv"}:
+        raw = storage.download_to_bytes(settings.S3_BUCKET_ORIGINALS, attachment.original_object_key)
+        if raw.startswith((b"\xff\xfe", b"\xfe\xff")):
+            text = raw.decode("utf-16", errors="replace")
         else:
-            # 直接读取原件（PDF 或文本文件）
-            pdf_bytes = storage.download_to_bytes(
-                settings.S3_BUCKET_ORIGINALS, attachment.original_object_key
-            )
-
-        import fitz  # PyMuPDF
-        doc = fitz.open(stream=pdf_bytes, filetype="pdf")
-
-        texts = []
-        total_chars = 0
-        max_chars = 5_000_000
-
-        for page in doc:
-            text = page.get_text()
-            total_chars += len(text)
-            if total_chars > max_chars:
-                texts.append(text[: max_chars - total_chars + len(text)])
-                break
-            texts.append(text)
-
-        doc.close()
-        full_text = "\n\n".join(texts)
-
-        completeness = "full"
-        warnings = []
-        if total_chars > max_chars:
-            completeness = "partial"
-            warnings.append(f"文本已截断，超过 {max_chars} 字符限制")
-
-        if len(full_text.strip()) < 10:
-            completeness = "empty"
-            warnings.append("PDF 不包含可抽取文本层（可能为扫描件）")
-
+            try:
+                text = raw.decode("utf-8-sig")
+            except UnicodeDecodeError:
+                text = raw.decode("gb18030", errors="replace")
+        extractor = "plain-text"
+    else:
+        source = attachment.pdf_source
+        if not source:
+            return ""
+        pages = []
+        length = 0
+        with fitz.open(stream=storage.download_to_bytes(*source), filetype="pdf") as doc:
+            for page in doc:
+                part = page.get_text()
+                pages.append(part)
+                length += len(part) + 2
+                if length > limit:
+                    break
+        text = "\n\n".join(pages)
+        extractor = "PyMuPDF"
+    text = text.replace("\x00", "").strip()
+    completeness = "empty" if not text else "partial" if len(text) > limit else "full"
+    text = text[:limit]
+    with transaction.atomic():
+        if source:
+            current = Attachment.objects.select_for_update().filter(pk=attachment.pk).first()
+            if not current or current.pdf_source != source:
+                # 读取过程中可能已从 Word 原件重建预览，旧文字不可覆盖新缓存。
+                return text
         AttachmentExtractedText.objects.update_or_create(
-            attachment=attachment,
-            defaults={
-                "content": full_text[:max_chars],
-                "completeness": completeness,
-                "extractor_name": "PyMuPDF",
-                "warnings": warnings,
-            },
+            attachment=attachment, defaults={"content": text, "completeness": completeness,
+            "extractor_name": extractor, "warnings": [] if text else ["没有可提取的文字层"]},
         )
+    return text
 
-        # 触发 AI 分析（如果启用）
-        if settings.LLM_ENABLED and completeness != "empty":
-            from analysis.tasks import analyze_report
-            # 找到关联的修订版
-            from reporting.models import WeeklyReportRevision
-            revision = WeeklyReportRevision.objects.filter(
-                confirmed_pdf_attachment=attachment
-            ).first()
-            if revision:
-                analyze_report.delay(str(revision.id))
 
-    except Exception as exc:
-        logger.exception("Text extraction failed for %s", attachment_id)
-        AttachmentExtractedText.objects.update_or_create(
-            attachment=attachment,
-            defaults={
-                "content": "",
-                "completeness": "empty",
-                "extractor_name": "error",
-                "warnings": [str(exc)],
-            },
-        )
+@shared_task(ignore_result=True)
+def extract_text(attachment_id: str):
+    attachment = Attachment.objects.filter(pk=attachment_id).first()
+    if attachment:
+        read_attachment_text(attachment)

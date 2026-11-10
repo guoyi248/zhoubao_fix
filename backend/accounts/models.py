@@ -1,6 +1,6 @@
 """
 账号模型：
-- User：自定义用户，支持 member / admin / super_admin 角色
+- User：自定义用户，支持 member / admin 角色
 - RegistrationRequest：注册申请
 - SessionRevocation：会话撤销记录
 """
@@ -15,9 +15,8 @@ from common.models import BaseModel
 
 
 class UserRole(models.TextChoices):
-    MEMBER = "member", "普通成员"
-    ADMIN = "admin", "业务管理员"
-    SUPER_ADMIN = "super_admin", "超级管理员"
+    MEMBER = "member", "普通用户"
+    ADMIN = "admin", "管理员"
 
 
 class AccountStatus(models.TextChoices):
@@ -25,6 +24,7 @@ class AccountStatus(models.TextChoices):
     PENDING = "pending_approval", "待审批"
     ACTIVE = "active", "已激活"
     DISABLED = "disabled", "已禁用"
+    DELETED = "deleted", "已删除"
 
 
 class UserManager(BaseUserManager):
@@ -42,7 +42,7 @@ class UserManager(BaseUserManager):
     def create_superuser(self, username, password=None, **extra_fields):
         extra_fields.setdefault("is_active", True)
         extra_fields.setdefault("account_status", AccountStatus.ACTIVE)
-        extra_fields.setdefault("role", UserRole.SUPER_ADMIN)
+        extra_fields.setdefault("role", UserRole.ADMIN)
         return self.create_user(username, password, **extra_fields)
 
     def get_by_natural_key(self, username):
@@ -55,8 +55,8 @@ class UserManager(BaseUserManager):
         """返回 viewer 可见的用户列表。"""
         if not viewer.is_authenticated or not viewer.is_active:
             return self.none()
-        if viewer.role in {UserRole.ADMIN, UserRole.SUPER_ADMIN}:
-            return self.all()
+        if viewer.is_admin:
+            return self.exclude(account_status=AccountStatus.DELETED)
         return self.filter(id=viewer.id)
 
 
@@ -92,6 +92,7 @@ class User(AbstractBaseUser, PermissionsMixin):
     )
 
     # 安全
+    session_version = models.PositiveIntegerField(default=0)
     totp_enabled = models.BooleanField("TOTP 已启用", default=False)
     totp_required = models.BooleanField("强制 TOTP", default=False)
 
@@ -127,22 +128,30 @@ class User(AbstractBaseUser, PermissionsMixin):
 
     @property
     def is_admin(self):
-        return self.role in {UserRole.ADMIN, UserRole.SUPER_ADMIN}
+        return self.role == UserRole.ADMIN and self.is_active and self.account_status == AccountStatus.ACTIVE
 
-    @property
-    def is_super_admin(self):
-        return self.role == UserRole.SUPER_ADMIN
+    def _get_session_auth_hash(self, secret=None):
+        previous = super()._get_session_auth_hash(secret)
+        if not self.session_version:
+            return previous  # 保留升级前的有效会话。
+        from django.utils.crypto import salted_hmac
+        return salted_hmac("accounts.session_version", f"{previous}:{self.session_version}",
+                           secret=secret, algorithm="sha256").hexdigest()
 
-    def activate(self):
+    def activate(self, password):
+        self.set_password(password)
+        self.password_changed_at = timezone.now()
         self.account_status = AccountStatus.ACTIVE
         self.activation_token = ""
         self.activation_token_expires_at = None
-        self.save(update_fields=["account_status", "activation_token", "activation_token_expires_at"])
+        self.save(update_fields=["password", "password_changed_at", "account_status",
+                                 "activation_token", "activation_token_expires_at"])
 
     def disable(self):
         self.account_status = AccountStatus.DISABLED
         self.is_active = False
-        self.save(update_fields=["account_status", "is_active"])
+        self.session_version += 1
+        self.save(update_fields=["account_status", "is_active", "session_version"])
         # 撤销所有现有会话
         SessionRevocation.objects.create(user=self, reason="账号被禁用")
 

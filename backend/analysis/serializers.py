@@ -30,6 +30,8 @@ class AnalysisItemSerializer(serializers.ModelSerializer):
 
 
 class AnalysisRunSerializer(serializers.ModelSerializer):
+    summary = serializers.CharField(source="output_json.summary", default="", read_only=True)
+    input_warnings = serializers.ListField(source="output_json.input_warnings", default=list, read_only=True)
     items = AnalysisItemSerializer(many=True, read_only=True)
 
     class Meta:
@@ -40,6 +42,8 @@ class AnalysisRunSerializer(serializers.ModelSerializer):
             "prompt_version",
             "schema_version",
             "status",
+            "summary",
+            "input_warnings",
             "tokens_used",
             "generated_at",
             "items",

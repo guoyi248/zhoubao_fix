@@ -26,6 +26,10 @@ class ReportingPeriodSerializer(serializers.ModelSerializer):
         ]
 
 
+class ReminderEmailSerializer(serializers.Serializer):
+    email = serializers.EmailField(allow_blank=True, max_length=254)
+
+
 class SaveDraftSerializer(serializers.Serializer):
     """保存草稿。"""
 
@@ -45,6 +49,9 @@ class WeeklyReportListSerializer(serializers.ModelSerializer):
 
     owner_name = serializers.CharField(source="owner.display_name")
     period_label = serializers.SerializerMethodField()
+    submitted_at = serializers.DateTimeField(source="current_revision.submitted_at", read_only=True, default=None)
+    revision_no = serializers.IntegerField(source="current_revision.revision_no", read_only=True, default=None)
+    published_filename = serializers.SerializerMethodField()
 
     class Meta:
         model = WeeklyReport
@@ -57,10 +64,19 @@ class WeeklyReportListSerializer(serializers.ModelSerializer):
             "reporting_period_id",
             "updated_at",
             "current_revision_id",
+            "submitted_at",
+            "revision_no",
+            "published_filename",
         ]
 
     def get_period_label(self, obj):
         return f"{obj.reporting_period.iso_year}-W{obj.reporting_period.iso_week:02d}"
+
+    def get_published_filename(self, obj):
+        if not obj.current_revision_id:
+            return ""
+        attachment = obj.current_revision.confirmed_pdf_attachment
+        return (attachment.uploaded_filename or attachment.original_filename) if attachment else ""
 
 
 class WeeklyReportDetailSerializer(serializers.ModelSerializer):
@@ -69,6 +85,7 @@ class WeeklyReportDetailSerializer(serializers.ModelSerializer):
     owner_name = serializers.CharField(source="owner.display_name")
     owner_department = serializers.CharField(source="owner.department.name", default="")
     period = ReportingPeriodSerializer(source="reporting_period", read_only=True)
+    draft_content_json = serializers.SerializerMethodField()
     revisions = serializers.SerializerMethodField()
 
     class Meta:
@@ -88,6 +105,11 @@ class WeeklyReportDetailSerializer(serializers.ModelSerializer):
             "updated_at",
             "revisions",
         ]
+
+    def get_draft_content_json(self, obj):
+        if self.context.get("published"):
+            return obj.current_revision.structured_content_json if obj.current_revision_id else {}
+        return obj.draft_content_json
 
     def get_revisions(self, obj):
         if obj.current_revision:

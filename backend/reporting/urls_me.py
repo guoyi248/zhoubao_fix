@@ -8,6 +8,7 @@ app_name = "reporting_me"
 
 urlpatterns = [
     path("", views.list_my_reports, name="list-reports"),
+    path("reminders", views.reminder_center, name="reminder-center"),
     path("current", views.current_report, name="current-report"),
     path("<uuid:report_id>", views.get_my_report, name="get-report"),
     path("<uuid:report_id>/save", views.save_draft, name="save-draft"),

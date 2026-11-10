@@ -1,15 +1,10 @@
-"""
-LLM 客户端 — 通过 OpenAI 兼容 API 调用大模型。
-首期直连，不依赖 LLM Gateway。
-"""
-
 import json
 import logging
 import time
-from typing import Any
 
 import requests
 from django.conf import settings
+from system_config.integrations import get_config, model_issues
 
 logger = logging.getLogger(__name__)
 
@@ -142,88 +137,73 @@ ANALYSIS_OUTPUT_SCHEMA = {
 }
 
 
+def request_completion(config, messages, *, schema=None):
+    """Send one completion through the configured provider; return text and token usage."""
+    base = config["base_url"].rstrip("/")
+    headers = {"Authorization": "Bearer " + config["api_key"]} if config["api_key"] else {}
+    payload = {"model": config["model"], "messages": messages}
+    ollama = config["provider"] == "ollama"
+    if ollama:
+        endpoint = base + ("/chat" if base.endswith("/api") else "/api/chat")
+        payload["stream"] = False
+        if schema is None:
+            payload["options"] = {"num_predict": 512}
+        else:
+            payload.update(format=schema, options={"temperature": 0.1})
+    else:
+        endpoint = base + "/chat/completions"
+        payload["max_tokens"] = 512 if schema is None else 4096
+        if schema is not None:
+            payload.update(response_format={"type": "json_object"}, temperature=0.1)
+
+    response = requests.post(endpoint, headers=headers, json=payload, allow_redirects=False,
+                             timeout=(settings.LLM_CONNECT_TIMEOUT_SECONDS, settings.LLM_READ_TIMEOUT_SECONDS))
+    response.raise_for_status()
+    data = response.json()
+    if ollama:
+        return data["message"]["content"], data.get("prompt_eval_count", 0) + data.get("eval_count", 0)
+    return data["choices"][0]["message"]["content"], (data.get("usage") or {}).get("total_tokens", 0)
+
+
 class LLMClient:
-    """OpenAI 兼容 API 客户端。"""
+    """在工作进程内使用配置的 OpenAI 兼容接口或 Ollama 原生接口。"""
 
-    def __init__(self):
-        self.base_url = settings.LLM_BASE_URL.rstrip("/")
-        self.api_key = settings.LLM_API_KEY
-        self.model = settings.LLM_MODEL
-        self.connect_timeout = settings.LLM_CONNECT_TIMEOUT_SECONDS
-        self.read_timeout = settings.LLM_READ_TIMEOUT_SECONDS
-        self.max_retries = settings.LLM_MAX_RETRIES
-        self.max_input_chars = settings.LLM_MAX_INPUT_CHARS
-
-    def analyze_report(self, report_text: str, attachment_texts: list[str] = None) -> dict:
-        """分析周报并返回结构化结果。"""
-        # 截断输入
-        combined_attachment_text = "\n\n---\n\n".join(
-            (attachment_texts or [])[:10]  # 最多 10 个附件
-        )
-        user_prompt = ANALYSIS_USER_TEMPLATE.format(
-            report_text=report_text[:self.max_input_chars],
-            attachment_texts=combined_attachment_text[:self.max_input_chars],
-        )
-
-        for attempt in range(self.max_retries):
+    def analyze_report(self, report_text: str, attachment_texts: list[str] | None = None) -> dict:
+        config = get_config("model", credentials=True)
+        model = config["model"]
+        if not config["enabled"] or model_issues(config):
+            raise ValueError("模型地址、名称或类型未配置")
+        source_text = ANALYSIS_USER_TEMPLATE.format(report_text=report_text, attachment_texts="\n\n".join(attachment_texts or []))
+        messages = [
+            {"role": "system", "content": ANALYSIS_SYSTEM_PROMPT + "\n用中文概括此人本周的实际进展。未提及的事项使用空数组。输出结构：\n" + json.dumps(ANALYSIS_OUTPUT_SCHEMA, ensure_ascii=False)},
+            {"role": "user", "content": source_text},
+        ]
+        for attempt in range(settings.LLM_MAX_RETRIES + 1):
             try:
-                response = requests.post(
-                    f"{self.base_url}/chat/completions",
-                    headers={
-                        "Authorization": f"Bearer {self.api_key}",
-                        "Content-Type": "application/json",
-                    },
-                    json={
-                        "model": self.model,
-                        "messages": [
-                            {"role": "system", "content": ANALYSIS_SYSTEM_PROMPT},
-                            {"role": "user", "content": user_prompt},
-                        ],
-                        "response_format": {"type": "json_object"},
-                        "temperature": 0.1,
-                        "max_tokens": 4096,
-                    },
-                    timeout=(self.connect_timeout, self.read_timeout),
-                )
-                response.raise_for_status()
-                data = response.json()
-                content = data["choices"][0]["message"]["content"]
-                result = json.loads(content)
-
-                # JSON Schema 校验
-                self._validate(result)
-
-                return {
-                    "output": result,
-                    "model": self.model,
-                    "tokens_used": data.get("usage", {}).get("total_tokens", 0),
-                }
-
-            except requests.RequestException as e:
-                logger.warning("LLM attempt %d failed: %s", attempt + 1, e)
-                if attempt < self.max_retries - 1:
-                    time.sleep(2 ** attempt)
-                else:
+                content, tokens = request_completion(config, messages, schema=ANALYSIS_OUTPUT_SCHEMA)
+                output = json.loads(content)
+                self._validate(output)
+                return {"output": output, "model": model, "tokens_used": tokens}
+            except requests.RequestException as exc:
+                permanent = exc.response is not None and 400 <= exc.response.status_code < 500 and exc.response.status_code not in {408, 429}
+                if permanent or attempt == settings.LLM_MAX_RETRIES:
                     raise
+                time.sleep(min(2 ** attempt, 10))
 
     def _validate(self, data: dict) -> None:
-        """轻量 Schema 校验——确保关键字段存在。"""
-        required = ["summary", "achievements", "risks", "blockers", "next_week_plans"]
-        for field in required:
-            if field not in data:
-                data[field] = [] if field != "summary" else ""
-
-        # 确保数组字段是数组
-        for field in ["achievements", "risks", "blockers", "coordination_requests", "next_week_plans", "meeting_topics"]:
-            if field in data and not isinstance(data[field], list):
-                data[field] = []
-
-        # 确保每个条目有 sources
-        for field in ["achievements", "risks", "blockers", "coordination_requests", "next_week_plans"]:
-            for item in data.get(field, []):
-                if "sources" not in item:
-                    item["sources"] = []
+        if not isinstance(data, dict) or not isinstance(data.get("summary"), str) or not data["summary"].strip():
+            raise ValueError("模型没有返回有效的进展总结")
+        for field in ANALYSIS_OUTPUT_SCHEMA["properties"]:
+            if field == "summary":
+                continue
+            entries = data.setdefault(field, [])
+            if not isinstance(entries, list):
+                raise ValueError("模型条目格式无效")
+            for entry in entries:
+                if not isinstance(entry, dict) or not isinstance(entry.get("title"), str):
+                    raise ValueError("模型条目缺少标题")
+                if not isinstance(entry.setdefault("sources", []), list):
+                    raise ValueError("模型来源格式无效")
 
 
-# 全局单例
 llm_client = LLMClient()

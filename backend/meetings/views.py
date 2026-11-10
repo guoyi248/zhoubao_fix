@@ -56,13 +56,13 @@ def create_meeting(request):
     period_id = request.data.get("reporting_period_id")
     if not period_id:
         # 默认当前周期
-        today = timezone.now().date()
+        today = timezone.localdate()
         iso = today.isocalendar()
-        period = get_object_or_404(
-            ReportingPeriod, iso_year=iso[0], iso_week=iso[1]
-        )
+        period = ReportingPeriod.objects.select_for_update().filter(iso_year=iso.year, iso_week=iso.week).first()
+        if period is None:
+            return Response({"code": "NO_REPORTS", "message": "此周期没有已提交的周报"}, status=400)
     else:
-        period = get_object_or_404(ReportingPeriod, id=period_id)
+        period = get_object_or_404(ReportingPeriod.objects.select_for_update(), id=period_id)
 
     # 检查已有进行中的会议
     active_meeting = Meeting.objects.filter(
@@ -78,6 +78,10 @@ def create_meeting(request):
             status=status.HTTP_409_CONFLICT,
         )
 
+    planned = Meeting.objects.filter(reporting_period=period, status=MeetingStatus.PLANNED).first()
+    if planned:
+        return Response(MeetingDetailSerializer(planned).data)
+
     # 获取所有已提交的周报
     reports = WeeklyReport.objects.filter(
         reporting_period=period,
@@ -86,7 +90,7 @@ def create_meeting(request):
             ReportStatus.RESUBMITTED,
             ReportStatus.ARCHIVED,
         },
-    ).select_related("owner", "current_revision")
+    ).exclude(current_revision=None).select_related("owner", "current_revision").order_by("owner__display_name", "owner_id")
 
     if not reports:
         return Response(
@@ -161,10 +165,18 @@ def list_meetings(request):
 # ═══════════════════════════════════════════════════════════════
 
 @api_view(["POST"])
+@transaction.atomic
 def start_meeting(request, meeting_id):
     """POST /api/v1/admin/meetings/{id}/start"""
     _require_admin(request.user)
-    meeting = get_object_or_404(Meeting, id=meeting_id)
+    meeting = get_object_or_404(Meeting.objects.select_for_update(), id=meeting_id)
+    ReportingPeriod.objects.select_for_update().get(pk=meeting.reporting_period_id)
+
+    active = Meeting.objects.filter(reporting_period_id=meeting.reporting_period_id,
+                                    status=MeetingStatus.IN_PROGRESS).first()
+    if active:
+        return Response({"code": "MEETING_IN_PROGRESS", "message": "此周期已有进行中的组会",
+                         "meeting_id": str(active.pk)}, status=409)
 
     if meeting.status != MeetingStatus.PLANNED:
         return Response(
@@ -180,10 +192,11 @@ def start_meeting(request, meeting_id):
 
 
 @api_view(["POST"])
+@transaction.atomic
 def finish_meeting(request, meeting_id):
     """POST /api/v1/admin/meetings/{id}/finish"""
     _require_admin(request.user)
-    meeting = get_object_or_404(Meeting, id=meeting_id)
+    meeting = get_object_or_404(Meeting.objects.select_for_update(), id=meeting_id)
 
     if meeting.status != MeetingStatus.IN_PROGRESS:
         return Response(
@@ -204,13 +217,16 @@ def finish_meeting(request, meeting_id):
 # ═══════════════════════════════════════════════════════════════
 
 @api_view(["PATCH"])
+@transaction.atomic
 def mark_discussed(request, meeting_id, snapshot_id):
     """
     PATCH /api/v1/admin/meetings/{id}/reports/{snapshot_id}
     标记某成员周报已讨论。
     """
     _require_admin(request.user)
-    meeting = get_object_or_404(Meeting, id=meeting_id)
+    meeting = get_object_or_404(Meeting.objects.select_for_update(), id=meeting_id)
+    if meeting.status == MeetingStatus.FINISHED:
+        return Response({"code": "INVALID_STATUS", "message": "组会已经结束，讨论记录已锁定"}, status=409)
 
     serializer = MarkDiscussedSerializer(data=request.data)
     serializer.is_valid(raise_exception=True)
@@ -223,15 +239,16 @@ def mark_discussed(request, meeting_id, snapshot_id):
         defaults={"discussed": False},
     )
 
-    state.discussed = serializer.validated_data["discussed"]
-    if state.discussed:
-        state.discussed_at = timezone.now()
-        state.discussed_by = request.user
+    if state.discussed != serializer.validated_data["discussed"]:
+        state.discussed = serializer.validated_data["discussed"]
+        state.discussed_at = timezone.now() if state.discussed else None
+        state.discussed_by = request.user if state.discussed else None
     state.note = serializer.validated_data.get("note", state.note)
     state.save()
 
     return Response({
         "snapshot_id": str(snapshot_id),
+        "note": state.note,
         "discussed": state.discussed,
         "discussed_at": state.discussed_at.isoformat() if state.discussed_at else None,
     })
@@ -251,11 +268,14 @@ def create_action_item(request, meeting_id):
     serializer.is_valid(raise_exception=True)
     data = serializer.validated_data
 
+    source_id = data.get("source_report_id")
+    if source_id and not meeting.report_snapshots.filter(report_revision__report_id=source_id).exists():
+        return Response({"code": "INVALID_REPORT", "message": "请选择本次组会中的周报"}, status=400)
     item = ActionItem.objects.create(
         meeting=meeting,
         source_report_id=data.get("source_report_id"),
         title=data["title"],
-        owner_id=data.get("owner_id"),
+        owner=data.get("owner"),
         due_date=data.get("due_date"),
         created_by=request.user,
     )
@@ -276,12 +296,14 @@ def update_action_item(request, action_item_id):
     serializer.is_valid(raise_exception=True)
     data = serializer.validated_data
 
-    for field in ["title", "owner_id", "due_date", "status", "resolution_note"]:
+    for field in ["title", "owner", "due_date", "status", "resolution_note"]:
         if field in data:
             setattr(item, field, data[field])
 
     if data.get("status") in {"done", "cancelled"} and not item.resolved_at:
         item.resolved_at = timezone.now()
+    elif data.get("status") in {"open", "in_progress"}:
+        item.resolved_at = None
 
     item.save()
     return Response(ActionItemSerializer(item).data)

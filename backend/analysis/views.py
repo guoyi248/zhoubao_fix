@@ -2,6 +2,7 @@
 AI analysis views: get, regenerate, confirm/reject items, team summary.
 """
 
+from django.db.models import F, OuterRef, Subquery
 from django.shortcuts import get_object_or_404
 
 from rest_framework import status
@@ -17,7 +18,8 @@ from .serializers import (
     AnalysisItemSerializer,
     UpdateAnalysisItemSerializer,
 )
-from .tasks import analyze_report
+from .tasks import queue_revision
+from system_config.integrations import get_config, model_issues, setup_info
 
 
 def _can_access_revision(user, revision: WeeklyReportRevision) -> bool:
@@ -38,6 +40,16 @@ def _can_access_revision(user, revision: WeeklyReportRevision) -> bool:
 # ═══════════════════════════════════════════════════════════════
 
 @api_view(["GET"])
+def analysis_service(request):
+    config = get_config("model")
+    issues = model_issues(config)
+    data = {"enabled": config["enabled"], "configured": not issues}
+    if request.user.is_admin:
+        data.update(provider=config["provider"], model=config["model"], setup=setup_info(issues))
+    return Response(data)
+
+
+@api_view(["GET"])
 def get_analysis(request, revision_id):
     """
     GET /api/v1/reports/{revision_id}/analysis
@@ -49,16 +61,24 @@ def get_analysis(request, revision_id):
         raise PermissionDeniedError()
 
     analysis_run = AnalysisRun.objects.filter(
-        revision=revision, status="completed"
+        revision=revision
     ).order_by("-created_at").first()
 
+    config = get_config("model")
+    available = config["enabled"] and not model_issues(config)
+    idle = "available" if available else ("unconfigured" if config["enabled"] else "disabled")
     if not analysis_run:
         return Response(
-            {"detail": "暂无分析结果", "status": "pending"},
+            {"detail": "暂无分析结果", "status": idle, "enabled": bool(available)},
             status=status.HTTP_200_OK,
         )
 
-    return Response(AnalysisRunSerializer(analysis_run).data)
+    data = dict(AnalysisRunSerializer(analysis_run).data, enabled=bool(available))
+    if analysis_run.status == "failed":
+        data["error_message"] = analysis_run.error_message if analysis_run.prompt_version == "v2" else "解析失败，可重新生成。"
+    if not available and data["status"] in {"queued", "running"}:
+        data["status"] = idle
+    return Response(data)
 
 
 # ═══════════════════════════════════════════════════════════════
@@ -76,10 +96,15 @@ def regenerate_analysis(request, revision_id):
     if not _can_access_revision(request.user, revision):
         raise PermissionDeniedError()
 
-    analyze_report.delay(str(revision.id))
+    config = get_config("model")
+    if not config["enabled"]:
+        return Response({"message": "工作区尚未启用大模型解析"}, status=409)
+    if model_issues(config):
+        return Response({"message": "模型服务配置不完整，请查看 AI 周报解析页面"}, status=409)
+    run = queue_revision(revision, force=True)
 
     return Response(
-        {"detail": "已触发重新分析", "status": "pending"},
+        {"detail": "已加入解析队列", "status": run.status},
         status=status.HTTP_202_ACCEPTED,
     )
 
@@ -184,6 +209,15 @@ def reject_analysis_item(request, item_id):
 # ═══════════════════════════════════════════════════════════════
 
 
+def _current_items(period_id):
+    latest = AnalysisRun.objects.filter(revision_id=OuterRef("analysis_run__revision_id"), status="completed").order_by("-created_at")
+    return AnalysisItem.objects.filter(
+        analysis_run__revision__report__reporting_period_id=period_id,
+        analysis_run__revision_id=F("analysis_run__revision__report__current_revision_id"),
+        analysis_run_id=Subquery(latest.values("pk")[:1]),
+    ).exclude(human_status="rejected")
+
+
 @api_view(["GET"])
 def team_summary(request):
     """
@@ -196,14 +230,7 @@ def team_summary(request):
     period_id = request.GET.get("period")
     item_type = request.GET.get("type")
 
-    items = AnalysisItem.objects.filter(
-        analysis_run__revision__report__reporting_period_id=period_id
-    ).filter(
-        # 只显示已确认或高置信度条目
-        human_status__in=["confirmed", "pending"]
-    ).exclude(
-        human_status="rejected"
-    ).select_related(
+    items = _current_items(period_id).select_related(
         "analysis_run__revision__report__owner",
         "analysis_run__revision__report__owner__department",
     )
@@ -268,10 +295,7 @@ def rebuild_team_summary(request):
     period = get_object_or_404(ReportingPeriod, id=period_id)
 
     # 直接查询分析条目
-    items = AnalysisItem.objects.filter(
-        analysis_run__revision__report__reporting_period=period,
-        human_status__in=["confirmed", "pending"],
-    ).exclude(human_status="rejected")
+    items = _current_items(period.pk)
 
     from .models import TeamSummarySnapshot
     snapshot = TeamSummarySnapshot.objects.create(

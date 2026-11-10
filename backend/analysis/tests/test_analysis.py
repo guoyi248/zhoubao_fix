@@ -87,7 +87,7 @@ def admin(department):
         username="admin",
         password="Admin123!",
         display_name="管理员",
-        role=UserRole.SUPER_ADMIN,
+        role=UserRole.ADMIN,
         account_status=AccountStatus.ACTIVE,
         department=department,
     )
