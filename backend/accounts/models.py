@@ -66,6 +66,7 @@ class User(AbstractBaseUser, PermissionsMixin):
     # 账号标识
     username = models.CharField("账号", max_length=150, unique=True)
     email = models.EmailField("邮箱", blank=True, default="")
+    weekly_reminders_enabled = models.BooleanField("周报定时邮件提醒", default=True)
 
     # 组织信息
     display_name = models.CharField("姓名", max_length=150)

@@ -46,9 +46,17 @@ class AdminUserSerializer(UserProfileSerializer):
     last_login_at = serializers.DateTimeField(source="latest_login_time", read_only=True, allow_null=True)
     last_login_ip = serializers.IPAddressField(read_only=True, allow_null=True)
     last_login_location = serializers.CharField(read_only=True, allow_null=True)
+    login_source_status = serializers.SerializerMethodField()
+
+    def get_login_source_status(self, obj):
+        if not obj.latest_login_time:
+            return "never"
+        if not obj.login_event_at:
+            return "legacy"
+        return "recorded" if obj.last_login_ip else "unknown"
 
     class Meta(UserProfileSerializer.Meta):
-        fields = [*UserProfileSerializer.Meta.fields, "last_login_ip", "last_login_location"]
+        fields = [*UserProfileSerializer.Meta.fields, "last_login_ip", "last_login_location", "login_source_status"]
         read_only_fields = fields
 
 

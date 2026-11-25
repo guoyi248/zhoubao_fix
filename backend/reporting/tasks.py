@@ -36,10 +36,11 @@ def send_weekly_reminders():
     period = current_period(now.date())
     if now >= period.deadline or period.status != PeriodStatus.OPEN:
         return 0
-    eligible = missing_members(period).exclude(email="")
+    eligible = missing_members(period).filter(weekly_reminders_enabled=True).exclude(email="")
     recipients = eligible.exclude(pk__in=WeeklyReminder.objects.filter(
         period=period, sent_at__isnull=False
-    ).values("user_id")).values_list("pk", flat=True)
+    ).values("user_id"))
+    recipients = recipients.values_list("pk", flat=True)
     connection = get_connection(host=config["host"], port=config["port"], username=config["username"],
                                 password=config["password"], use_tls=config["use_tls"], use_ssl=config["use_ssl"])
     sent = 0

@@ -225,6 +225,7 @@ def admin_list_users(request):
         qs = qs.filter(Q(username__icontains=query) | Q(display_name__icontains=query) | Q(email__icontains=query))
     latest_login = AuditEvent.objects.filter(actor_id=OuterRef("pk"), event_type=AuditEvent.EventType.LOGIN_SUCCESS).order_by("-created_at", "-event_id")
     qs = qs.annotate(
+        login_event_at=Subquery(latest_login.values("created_at")[:1]),
         latest_login_time=Coalesce("last_login_at", Subquery(latest_login.values("created_at")[:1]), "last_login"),
         last_login_ip=Subquery(latest_login.values("actor_ip")[:1]),
         last_login_location=Subquery(latest_login.values("actor_location")[:1]),

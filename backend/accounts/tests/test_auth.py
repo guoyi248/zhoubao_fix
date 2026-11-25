@@ -215,6 +215,7 @@ class TestPermissionIsolation:
         users = api_client.get("/api/v1/admin/users", {"q": member_user.username, "page": 1}).json()
         assert users["total"] == 1 and users["users"][0]["last_login_at"]
         assert users["users"][0]["last_login_location"] == "来源未知"
+        assert users["users"][0]["login_source_status"] == "unknown"
         assert api_client.get("/api/v1/admin/audit/", {"days": "nan"}).status_code == 400
 
     def test_disabled_sessions_stay_revoked_on_reactivation(self, api_client, admin_user, member_user):
@@ -249,6 +250,17 @@ class TestPermissionIsolation:
         from datetime import datetime
         assert datetime.fromisoformat(row["last_login_at"]) == event.created_at
         assert row["last_login_ip"] == entry["actor_ip"]
+        assert row["login_source_status"] == "recorded"
+
+    def test_legacy_login_time_is_distinguished_from_no_login(self, api_client, admin_user, member_user, member_b):
+        from django.utils import timezone
+        member_user.last_login_at = timezone.now()
+        member_user.save(update_fields=["last_login_at"])
+        api_client.force_login(admin_user)
+        rows = {row["id"]: row for row in api_client.get("/api/v1/admin/users").json()}
+        assert rows[member_user.pk]["login_source_status"] == "legacy"
+        assert rows[member_user.pk]["last_login_ip"] is None
+        assert rows[member_b.pk]["login_source_status"] == "never"
 
     def test_member_a_cannot_access_member_b_report(self, api_client, member_user, member_b):
         # 成员 B 登录，创建并提交周报

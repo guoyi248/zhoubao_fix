@@ -6,10 +6,10 @@ import { ArrowRight, Collection, Document, EditPen, Expand, Folder, MoreFilled, 
 import KnowledgeDirectory from "@/components/KnowledgeDirectory.vue";
 import KnowledgeEditor from "@/components/KnowledgeEditor.vue";
 import KnowledgeMarkdown from "@/components/KnowledgeMarkdown.vue";
+import KnowledgeHistory from "@/components/KnowledgeHistory.vue";
 import { useUserStore } from "@/stores/user";
 import api from "@/utils/api";
 import { indexKnowledge, knowledgeLocation, type Article, type Entry, type Topic } from "@/utils/knowledgeTree";
-
 const route = useRoute();
 const router = useRouter();
 const user = useUserStore();
@@ -28,96 +28,213 @@ const missing = computed(() => (route.query.doc && !selected.value) || (route.qu
 const directoryOpen = ref(false);
 const editor = ref<InstanceType<typeof KnowledgeEditor>>();
 const searchInput = ref<HTMLInputElement>();
-const query = ref("");
+const query = computed({ get: () => String(route.query.q || ""), set: value => {
+        void router.replace({ query: { ...route.query, q: value || undefined, doc: undefined, page: undefined } });
+    } });
+const searchScope = computed(() => String(route.query.scope || ""));
+const searchPage = computed(() => Math.max(1, Number(route.query.page) || 1));
+const totalResults = ref(0);
+const historyPanel = ref<InstanceType<typeof KnowledgeHistory>>();
+const importing = ref(false);
+const exporting = ref(false);
+const importOpen = ref(false);
+const archiveFile = ref<File>();
+const importTarget = ref("");
+const importError = ref("");
+const importLocations = computed(() => Array.from(catalog.value.byId.values()).map(folder => ({ id: folder.id, name: catalog.value.path(folder.id).map(node => node.name).join(" / ") })));
+function searchLocation(moduleId: string, docId: string) {
+    const location = knowledgeLocation(moduleId, docId);
+    return { ...location, query: { ...location.query, q: term.value, scope: searchScope.value || undefined, page: searchPage.value > 1 ? searchPage.value : undefined } };
+}
+function changeScope(event: Event) {
+    void router.replace({ query: { ...route.query, scope: (event.target as HTMLSelectElement).value || undefined, page: undefined, doc: undefined } });
+}
+function changePage(page: number) {
+    void router.push({ query: { ...route.query, page: page > 1 ? page : undefined, doc: undefined } });
+}
+async function importArchive() {
+    if (!archiveFile.value || importing.value)
+        return;
+    importing.value = true;
+    importError.value = "";
+    try {
+        const form = new FormData();
+        form.append("file", archiveFile.value);
+        if (importTarget.value)
+            form.append("module", importTarget.value);
+        const { data } = await api.post("/knowledge/import", form, { headers: { "Content-Type": "multipart/form-data" } });
+        importOpen.value = false;
+        archiveFile.value = undefined;
+        await saved(data.module);
+        ElMessage.success(`已导入 ${data.documents} 篇文档、${data.images} 张图片`);
+    }
+    catch (e) {
+        importError.value = errorMessage(e);
+    }
+    finally {
+        importing.value = false;
+    }
+}
+async function exportSpace() {
+    if (!root.value || exporting.value)
+        return;
+    exporting.value = true;
+    try {
+        const { data } = await api.get(`/knowledge/modules/${root.value.id}/export`, { responseType: "blob" });
+        const url = URL.createObjectURL(data);
+        const link = document.createElement("a");
+        link.href = url;
+        link.download = root.value.name + ".zip";
+        link.click();
+        setTimeout(() => URL.revokeObjectURL(url), 1000);
+    }
+    catch {
+        ElMessage.error("导出失败，请检查文档图片是否完整后重试");
+    }
+    finally {
+        exporting.value = false;
+    }
+}
 const term = computed(() => query.value.trim());
-const results = ref<(Entry & {excerpt: string})[]>([]);
-const hasMore = ref(false);
+const results = ref<(Entry & {
+    excerpt: string;
+})[]>([]);
 const searching = ref(false);
 const searchError = ref("");
 const searchRevision = ref(0);
 let catalogRequest = 0;
-
 function errorMessage(e: any) {
-  return e.response?.data?.message || e.response?.data?.detail || e.message || "请求失败，请重试。";
+    return e.response?.data?.message || e.response?.data?.detail || e.message || "请求失败，请重试。";
 }
 async function loadCatalog() {
-  const request = ++catalogRequest;
-  catalogLoading.value = true;
-  catalogError.value = "";
-  try {
-    const { data } = await api.get<Topic[]>("/knowledge/");
-    if (request === catalogRequest) topics.value = data;
-  } catch (e) { if (request === catalogRequest) catalogError.value = errorMessage(e); }
-  finally { if (request === catalogRequest) catalogLoading.value = false; }
+    const request = ++catalogRequest;
+    catalogLoading.value = true;
+    catalogError.value = "";
+    try {
+        const { data } = await api.get<Topic[]>("/knowledge/");
+        if (request === catalogRequest)
+            topics.value = data;
+    }
+    catch (e) {
+        if (request === catalogRequest)
+            catalogError.value = errorMessage(e);
+    }
+    finally {
+        if (request === catalogRequest)
+            catalogLoading.value = false;
+    }
 }
 watch(selected, async (entry, _, cleanup) => {
-  const ctl = new AbortController();
-  cleanup(() => ctl.abort());
-  article.value = undefined;
-  articleError.value = "";
-  if (!entry) return;
-  try {
-    const { data } = await api.get<Article>("/knowledge/documents/" + entry.id, { signal: ctl.signal });
-    if (!ctl.signal.aborted) article.value = data;
-  } catch (e) { if (!ctl.signal.aborted) articleError.value = errorMessage(e); }
-}, { immediate: true });
-
-watch([term, searchRevision], ([q], _, cleanup) => {
-  results.value = [];
-  hasMore.value = false;
-  searchError.value = "";
-  searching.value = !!q;
-  if (!q) return;
-  const ctl = new AbortController();
-  const timer = window.setTimeout(async () => {
+    const ctl = new AbortController();
+    cleanup(() => ctl.abort());
+    article.value = undefined;
+    articleError.value = "";
+    if (!entry)
+        return;
     try {
-      const { data } = await api.get("/knowledge/search", { params: { q }, signal: ctl.signal });
-      if (!ctl.signal.aborted) {
-        results.value = data.results;
-        hasMore.value = data.has_more;
-      }
-    } catch (e) { if (!ctl.signal.aborted) searchError.value = errorMessage(e); }
-    finally { if (!ctl.signal.aborted) searching.value = false; }
-  }, 220);
-  cleanup(() => { clearTimeout(timer); ctl.abort(); });
-});
+        const { data } = await api.get<Article>("/knowledge/documents/" + entry.id, { signal: ctl.signal });
+        if (!ctl.signal.aborted)
+            article.value = data;
+    }
+    catch (e) {
+        if (!ctl.signal.aborted)
+            articleError.value = errorMessage(e);
+    }
+}, { immediate: true });
+watch([term, searchRevision, searchScope, searchPage], ([q], _, cleanup) => {
+    results.value = [];
+    totalResults.value = 0;
+    searchError.value = "";
+    searching.value = !!q;
+    if (!q)
+        return;
+    const ctl = new AbortController();
+    const timer = window.setTimeout(async () => {
+        try {
+            const { data } = await api.get("/knowledge/search", { params: { q, scope: searchScope.value || undefined, page: searchPage.value }, signal: ctl.signal });
+            if (!ctl.signal.aborted) {
+                results.value = data.results;
+                totalResults.value = data.total;
+            }
+        }
+        catch (e) {
+            if (!ctl.signal.aborted)
+                searchError.value = errorMessage(e);
+        }
+        finally {
+            if (!ctl.signal.aborted)
+                searching.value = false;
+        }
+    }, 220);
+    cleanup(() => {
+        clearTimeout(timer);
+        ctl.abort();
+    });
+}, { immediate: true });
 watch(() => [route.query.module, route.query.doc], async () => {
-  directoryOpen.value = false;
-  query.value = "";
-  await nextTick();
-  window.scrollTo(0, 0);
+    directoryOpen.value = false;
+    await nextTick();
+    window.scrollTo(0, 0);
 });
 async function saved(moduleId: string, docId?: string) {
-  await loadCatalog();
-  await router.replace(knowledgeLocation(moduleId, docId));
+    await loadCatalog();
+    await router.replace(knowledgeLocation(moduleId, docId));
 }
 function folderAction(command: string) {
-  const current = topic.value;
-  if (!current) return;
-  if (command === "folder") editor.value?.edit("folder", current.id);
-  if (command === "document") editor.value?.edit("document", current.id);
-  if (command === "edit") editor.value?.edit(current.parent ? "folder" : "space", current.parent || "", current);
-  if (command === "remove") removeItem(false);
+    const current = topic.value;
+    if (!current)
+        return;
+    if (command === "folder")
+        editor.value?.edit("folder", current.id);
+    if (command === "document")
+        editor.value?.edit("document", current.id);
+    if (command === "edit")
+        editor.value?.edit(current.parent ? "folder" : "space", current.parent || "", current);
+    if (command === "remove")
+        removeItem(false);
+}
+function manageKnowledge(command: string) {
+    if (command === "trash") {
+        void historyPanel.value?.showTrash();
+        return;
+    }
+    importTarget.value = topic.value?.id || "";
+    importError.value = "";
+    importOpen.value = true;
+}
+function highlightParts(text: string) {
+    const escaped = term.value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+    return text.split(new RegExp("(" + escaped + ")", "gi")).map(part => ({
+        text: part, matched: part.toLocaleLowerCase() === term.value.toLocaleLowerCase(),
+    }));
 }
 async function removeItem(isDoc: boolean) {
-  const current = topic.value;
-  const item = isDoc ? article.value : current;
-  if (!current || !item) return;
-  const label = isDoc ? "文档" : current.parent ? "目录" : "空间";
-  const itemName = "title" in item ? item.title : item.name;
-  try { await ElMessageBox.confirm("删除「" + itemName + "」？", "删除" + label,
-    { type: "warning", confirmButtonText: "删除", cancelButtonText: "取消" }); }
-  catch { return; }
-  try {
-    await api.delete((isDoc ? "/knowledge/documents/" : "/knowledge/modules/") + item.id, { data: { version: item.version } });
-    const returnTo = isDoc ? current.id : current.parent;
-    await loadCatalog();
-    await router.replace(returnTo ? knowledgeLocation(returnTo) : { path: "/knowledge" });
-    ElMessage.success(label + "已删除");
-  } catch (e) { ElMessage.error(errorMessage(e)); await loadCatalog(); }
+    const current = topic.value;
+    const item = isDoc ? article.value : current;
+    if (!current || !item)
+        return;
+    const label = isDoc ? "文档" : current.parent ? "目录" : "空间";
+    const itemName = "title" in item ? item.title : item.name;
+    try {
+        await ElMessageBox.confirm("删除「" + itemName + "」？", "删除" + label, { type: "warning", confirmButtonText: isDoc ? "移入回收站" : "删除", cancelButtonText: "取消" });
+    }
+    catch {
+        return;
+    }
+    try {
+        await api.delete((isDoc ? "/knowledge/documents/" : "/knowledge/modules/") + item.id, { data: { version: item.version } });
+        const returnTo = isDoc ? current.id : current.parent;
+        await loadCatalog();
+        await router.replace(returnTo ? knowledgeLocation(returnTo) : { path: "/knowledge" });
+        ElMessage.success(label + "已删除");
+    }
+    catch (e) {
+        ElMessage.error(errorMessage(e));
+        await loadCatalog();
+    }
 }
 function updated(value: string) {
-  return new Intl.DateTimeFormat("zh-CN", { timeZone: "Asia/Shanghai", year: "numeric", month: "long", day: "numeric" }).format(new Date(value));
+    return new Intl.DateTimeFormat("zh-CN", { timeZone: "Asia/Shanghai", year: "numeric", month: "long", day: "numeric" }).format(new Date(value));
 }
 onMounted(loadCatalog);
 </script>
@@ -130,22 +247,25 @@ onMounted(loadCatalog);
         <label class="searchbox"><el-icon><Search /></el-icon>
           <input ref="searchInput" v-model="query" type="search" placeholder="搜索全部文档" aria-label="搜索全部文档" maxlength="160" @keydown.esc="query = ''" />
         </label>
+        <select v-if="term" class="search-scope" :value="searchScope" aria-label="搜索范围" @change="changeScope"><option value="">全部空间</option><option v-for="space in catalog.roots" :key="space.id" :value="space.id">{{ space.name }}</option></select>
+        <el-button v-if="root" :loading="exporting" @click="exportSpace">导出空间</el-button>
+        <el-dropdown v-if="user.isAdmin" trigger="click" @command="manageKnowledge"><el-button>管理</el-button><template #dropdown><el-dropdown-menu><el-dropdown-item command="import">导入 ZIP 文档包</el-dropdown-item><el-dropdown-item command="trash">回收站</el-dropdown-item></el-dropdown-menu></template></el-dropdown>
         <el-button v-if="user.isAdmin && !topic && !term && !missing && !catalogLoading && !catalogError" :icon="Plus" @click="editor?.edit('space')">新建空间</el-button>
       </div>
     </header>
     <p v-if="catalogError" class="panel" role="alert">{{ catalogError }} <button type="button" class="link-button" @click="loadCatalog">重新载入</button></p>
     <p v-else-if="catalogLoading && !topics.length" class="panel empty-copy" role="status">正在读取知识目录…</p>
-    <section v-else-if="term" class="panel search-results" aria-label="搜索结果">
+    <section v-else-if="term&&!selected" class="panel search-results" aria-label="搜索结果">
       <header class="panel-head"><h2>搜索结果</h2><button type="button" class="link-button" @click="query = ''; searchInput?.focus()">清除搜索</button></header>
       <p v-if="searching" class="empty-copy" role="status">正在搜索…</p>
       <p v-else-if="searchError" class="empty-copy" role="alert">{{ searchError }} <button type="button" class="link-button" @click="searchRevision++">重试</button></p>
       <p v-else-if="!results.length" class="empty-copy">没有找到与“{{ term }}”匹配的文档。</p>
-      <router-link v-for="item in results" :key="item.id" :to="knowledgeLocation(item.module, item.id)" class="result-link" @click="query = ''">
-        <el-icon><Document /></el-icon><div><strong>{{ item.title }}</strong>
+      <router-link v-for="item in results" :key="item.id" :to="searchLocation(item.module, item.id)" class="result-link">
+        <el-icon><Document /></el-icon><div><strong><template v-for="(part,index) in highlightParts(item.title)" :key="index"><mark v-if="part.matched">{{ part.text }}</mark><template v-else>{{ part.text }}</template></template></strong>
           <p class="location">{{ catalog.path(item.module).map(t => t.name).join(" / ") }}</p>
-          <p v-if="item.excerpt" class="excerpt">{{ item.excerpt }}</p></div>
+          <p v-if="item.excerpt" class="excerpt"><template v-for="(part,index) in highlightParts(item.excerpt)" :key="index"><mark v-if="part.matched">{{ part.text }}</mark><template v-else>{{ part.text }}</template></template></p></div>
       </router-link>
-      <p v-if="hasMore" class="muted">已显示前 50 篇，输入更具体的关键词可缩小范围。</p>
+      <el-pagination v-if="totalResults>25&&!searching" layout="total,prev,pager,next" :total="totalResults" :page-size="25" :current-page="searchPage" @current-change="changePage" />
     </section>
     <p v-else-if="missing" class="panel empty-copy" role="status">找不到这个位置，内容可能已经移动或删除。<router-link to="/knowledge">返回全部空间</router-link></p>
     <section v-else-if="!topic || !root" aria-label="知识空间" class="space-home">
@@ -166,6 +286,7 @@ onMounted(loadCatalog);
         :catalog="catalog" :root="root" :topic-id="topic.id" :doc-id="selected?.id" @navigate="directoryOpen = false" />
       <section class="reading-pane" :aria-label="selected ? '文档阅读' : '目录内容'">
         <nav aria-label="当前位置" class="crumbs">
+          <router-link v-if="term" :to="{path:'/knowledge',query:{q:term,scope:searchScope||undefined,page:searchPage>1?searchPage:undefined}}">返回搜索结果</router-link>
           <router-link to="/knowledge" aria-current-value="false">全部空间</router-link>
           <template v-for="(item, index) in path" :key="item.id"><el-icon><ArrowRight /></el-icon>
             <router-link :to="knowledgeLocation(item.id)" :aria-current="!selected && index === path.length-1 ? 'page' : undefined">{{ item.name }}</router-link>
@@ -175,10 +296,11 @@ onMounted(loadCatalog);
         <article v-if="article" :key="article.id" class="article">
           <header class="content-head"><div><h2>{{ article.title }}</h2><time :datetime="article.updated_at">更新于 {{ updated(article.updated_at) }}</time></div>
             <div v-if="user.isAdmin" class="content-actions">
+              <button class="link-button" type="button" @click="historyPanel?.showHistory(article)">历史版本</button>
               <button class="link-button" type="button" @click="editor?.edit('document', article.module, article)"><el-icon><EditPen /></el-icon>编辑</button>
               <el-dropdown trigger="click" @command="removeItem(true)">
                 <button class="icon-button" type="button" aria-label="更多文档操作"><el-icon><MoreFilled /></el-icon></button>
-                <template #dropdown><el-dropdown-menu><el-dropdown-item>删除文档</el-dropdown-item></el-dropdown-menu></template>
+                <template #dropdown><el-dropdown-menu><el-dropdown-item>移入回收站</el-dropdown-item></el-dropdown-menu></template>
               </el-dropdown>
             </div>
           </header>
@@ -214,11 +336,14 @@ onMounted(loadCatalog);
       </section>
     </div>
     <KnowledgeEditor v-if="user.isAdmin" ref="editor" :catalog="catalog" @saved="saved" />
+    <KnowledgeHistory v-if="user.isAdmin" ref="historyPanel" :catalog="catalog" @restored="saved" />
+    <el-dialog v-model="importOpen" title="导入知识库" width="min(500px,94vw)" :close-on-click-modal="false" :show-close="!importing" :close-on-press-escape="!importing"><form class="archive-form" @submit.prevent="importArchive"><label>ZIP 文档包<input type="file" accept=".zip,application/zip" :disabled="importing" @change="archiveFile=($event.target as HTMLInputElement).files?.[0]" /></label><p class="muted">支持本系统导出的 ZIP，或包含 Markdown 和图片的文件夹压缩包。</p><label>导入到<select v-model="importTarget" :disabled="importing"><option value="">新知识空间</option><option v-for="folder in importLocations" :key="folder.id" :value="folder.id">{{ folder.name }}</option></select></label><p v-if="importError" role="alert" class="form-error">{{ importError }}</p></form><template #footer><el-button :disabled="importing" @click="importOpen=false">取消</el-button><el-button type="primary" :loading="importing" :disabled="!archiveFile" @click="importArchive">导入</el-button></template></el-dialog>
   </div>
 </template>
 
 <style scoped>
 .kb { max-width:1370px; min-width:0; }
+.search-scope,.archive-form select{padding:8px;border:1px solid var(--line);border-radius:7px;background:var(--glass-field);color:var(--ink);max-width:180px}.kb-tools{flex-wrap:nowrap}.archive-form{display:grid;gap:14px}.archive-form label{display:grid;gap:7px;font-size:14px}.archive-form select{max-width:100%}.form-error{color:#9e3529}.result-link mark{background:rgb(206 229 163 / 60%);color:inherit;border-radius:2px}
 .kb-heading { margin-bottom:24px; }
 .searchbox { display:flex; align-items:center; gap:9px; width:min(255px,100%); padding:8px 11px; border:1px solid var(--line); background:var(--glass-field); border-radius:8px; color:var(--muted); }
 .searchbox:focus-within { border-color:var(--teal); outline:2px solid var(--soft); }
@@ -234,7 +359,7 @@ onMounted(loadCatalog);
 .card-arrow { margin-left:auto; flex:none; font-size:12px; color:#718575; }
 .library { display:grid; grid-template-columns:clamp(200px,22%,278px) minmax(0,1fr); border:1px solid var(--glass-edge); border-radius:12px; overflow:clip; min-height:min(63vh,540px); }
 .directory-toggle { display:none; }
-.reading-pane { min-width:0; padding:clamp(18px,2.8vw,42px); }
+.reading-pane { min-width:0; padding:clamp(18px,2.8vw,42px); background:rgb(248 252 247 / 72%); }
 .crumbs { display:flex; flex-wrap:wrap; gap:5px 7px; align-items:center; margin-bottom:22px; color:var(--muted); font-size:12px; line-height:1.6; }
 .crumbs a { text-decoration:none; color:#2c4437; }
 .crumbs a:hover { text-decoration:underline; }
@@ -264,6 +389,7 @@ onMounted(loadCatalog);
   .crumbs { margin-bottom:16px; }
 }
 @media(max-width:540px) {
+  .kb-tools { flex-wrap:wrap; width:100%; }
   .kb-heading { align-items:stretch; flex-direction:column; gap:13px; margin-bottom:17px; }
   .searchbox { width:100%; }
   .space-card { padding:16px 14px; }

@@ -41,7 +41,7 @@ if errorlevel 1 (
 )
 set "VITE_PROXY_TARGET=http://127.0.0.1:%WEEKLY_API_PORT%"
 echo Weekly report workspace: http://127.0.0.1:%WEEKLY_WEB_PORT%
-start "Weekly-Report-Backend-%WEEKLY_API_PORT%" /min cmd /c "python backend\manage.py runserver 127.0.0.1:%WEEKLY_API_PORT% --noreload"
+start "Weekly-Report-Backend-%WEEKLY_API_PORT%" /min cmd /c "python backend\manage.py runserver 127.0.0.1:%WEEKLY_API_PORT%"
 start "Weekly-Report-Jobs-%WEEKLY_WEB_PORT%" /min cmd /c "python backend\manage.py run_weekly_jobs --watch"
 start "Weekly-Report-Frontend-%WEEKLY_WEB_PORT%" /min /d frontend cmd /c "npm run dev -- --host 127.0.0.1 --port %WEEKLY_WEB_PORT% --strictPort"
 

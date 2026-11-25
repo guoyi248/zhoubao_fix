@@ -293,6 +293,7 @@ CELERY_BEAT_SCHEDULE = {
 # LLM
 LLM_ENABLED = os.environ.get("ENABLE_LLM", "false").lower() == "true"
 LLM_PROVIDER = os.environ.get("LLM_PROVIDER", "openai_compatible")
+LLM_THINKING = os.environ.get("LLM_THINKING", "false").lower() == "true"
 LLM_BASE_URL = os.environ.get("LLM_BASE_URL", "")
 LLM_API_KEY_ENCRYPTED = os.environ.get("LLM_API_KEY_ENCRYPTED", "")
 LLM_API_KEY = os.environ.get("LLM_API_KEY", "")

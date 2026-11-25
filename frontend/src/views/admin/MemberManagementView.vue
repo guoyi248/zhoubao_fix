@@ -2,7 +2,7 @@
 import { onBeforeUnmount, onMounted, ref } from "vue";
 import { useRouter } from "vue-router";
 import { ElMessage, ElMessageBox } from "element-plus";
-import { Plus, Search, MoreFilled } from "@element-plus/icons-vue";
+import { Plus, Search, MoreFilled, Refresh } from "@element-plus/icons-vue";
 import api from "@/utils/api";
 import { useUserStore } from "@/stores/user";
 
@@ -11,6 +11,7 @@ interface Member {
   id: number; username: string; display_name: string; email: string; role: Role;
   account_status: string; last_login_at: string | null; last_login_ip: string | null;
   last_login_location: string | null;
+  login_source_status?: "never" | "legacy" | "recorded" | "unknown";
 }
 interface Form { username: string; display_name: string; email: string; role: Role }
 const emptyForm = (): Form => ({ username:"", display_name:"", email:"", role:"member" });
@@ -86,6 +87,16 @@ async function save() {
 function formatTime(value: string | null) {
   return value ? new Date(value).toLocaleString("zh-CN",{timeZone:"Asia/Shanghai",hour12:false}) : "尚未登录";
 }
+function loginIp(member: Member) {
+  if (member.last_login_ip) return member.last_login_ip;
+  if (!member.last_login_at) return "暂无登录记录";
+  return member.login_source_status === "legacy" ? "历史登录未记录 IP" : "未获取到来源 IP";
+}
+function loginLocation(member: Member) {
+  if (member.last_login_location) return member.last_login_location;
+  if (!member.last_login_at) return "暂无登录记录";
+  return "历史登录未记录地点";
+}
 async function action(command: string, member: Member) {
   const url = "/admin/users/" + member.id;
   try {
@@ -122,7 +133,7 @@ onMounted(() => load());
   <div class="stack users-page">
     <header class="section-heading glass-heading">
       <h1 class="page-title">用户管理</h1>
-      <el-button type="primary" :icon="Plus" @click="openForm(null)">新增用户</el-button>
+      <div class="action-row"><el-button :icon="Refresh" :loading="loading" @click="load(page)">刷新</el-button><el-button type="primary" :icon="Plus" @click="openForm(null)">新增用户</el-button></div>
     </header>
     <section class="panel directory" aria-label="用户列表">
       <form class="tools" @submit.prevent="load()">
@@ -132,14 +143,14 @@ onMounted(() => load());
       </form>
       <p v-if="error" role="alert">{{ error }} <button class="link-button" @click="load(page)">重试</button></p>
       <div v-else v-loading="loading" :aria-busy="loading">
-        <div class="user-grid columns" aria-hidden="true"><span>成员</span><span>权限与状态</span><span>最近登录 · 北京时间</span><span>操作</span></div>
+        <div class="user-grid columns" aria-hidden="true"><span>成员</span><span>权限与状态</span><span>最近登录与来源 · 北京时间</span><span>操作</span></div>
         <article v-for="member in users" :key="member.id" class="user-grid user-row">
           <div class="identity"><span class="user-avatar" aria-hidden="true">{{ member.display_name.slice(-1) }}</span><div><strong>{{ member.display_name }}</strong>
             <small>{{ member.username }}</small><small v-if="member.email">{{ member.email }}</small></div></div>
           <div><span class="role-chip" :class="{admin:member.role==='admin'}">{{ member.role==='admin'?'管理员':'普通用户' }}</span>
             <small>{{ statusLabels[member.account_status] || member.account_status }}</small></div>
           <div class="last-login"><span v-if="member.last_login_at" class="mobile-label">最近登录（北京时间）</span><span>{{ formatTime(member.last_login_at) }}</span>
-            <small v-if="member.last_login_at">{{ member.last_login_location || "未记录地点" }} · {{ member.last_login_ip || "IP 未记录" }}</small></div>
+            <small>IP {{ loginIp(member) }}</small><small>地点 {{ loginLocation(member) }}</small></div>
           <div class="row-actions"><el-button text @click="openForm(member)">编辑</el-button>
             <el-dropdown trigger="click" @command="action($event, member)"><el-button text :icon="MoreFilled" :aria-label="'更多操作 · '+member.display_name" />
               <template #dropdown><el-dropdown-menu>

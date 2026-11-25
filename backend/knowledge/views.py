@@ -20,7 +20,7 @@ from rest_framework.response import Response
 from accounts.models import AccountStatus
 from common.exceptions import ObjectNotFound
 from common.storage import storage
-from .models import KnowledgeDocument, KnowledgeModule
+from .models import KnowledgeDocument, KnowledgeModule, remember_document
 
 
 def can_read_knowledge(user):
@@ -63,6 +63,7 @@ class VersionInput(serializers.Serializer):
 class SearchInput(serializers.Serializer):
     q = serializers.CharField(max_length=160, required=False, allow_blank=True)
     scope = serializers.UUIDField(required=False)
+    page = serializers.IntegerField(min_value=1, required=False, default=1)
 
 
 def conflict(message):
@@ -106,6 +107,8 @@ def save_content(request, model, form_class, identify, pk=None):
         with transaction.atomic():
             if pk is None:
                 obj = model.objects.create(**form.validated_data)
+                if model is KnowledgeDocument:
+                    remember_document(obj, request.user)
                 return Response(identify(obj), status=201)
             revision = VersionInput(data=request.data)
             revision.is_valid(raise_exception=True)
@@ -113,6 +116,10 @@ def save_content(request, model, form_class, identify, pk=None):
             if model is KnowledgeModule and parent and not can_move_directory(pk, parent.pk):
                 return conflict("无法移动到自身、下级或已变更的目录。")
             current_revision = model.objects.filter(pk=pk, version=revision.validated_data["version"])
+            if model is KnowledgeDocument:
+                previous = get_object_or_404(model.objects.select_for_update(), pk=pk, deleted_at__isnull=True)
+                remember_document(previous)
+                current_revision = current_revision.filter(deleted_at__isnull=True)
             keep_empty = form.validated_data.get("markdown") == ""
             # An imported title-only article may move, but an edit must never clear a filled article.
             target = current_revision.filter(markdown="") if keep_empty else current_revision
@@ -122,7 +129,10 @@ def save_content(request, model, form_class, identify, pk=None):
                 if keep_empty and current_revision.exists():
                     raise serializers.ValidationError({"markdown": ["不能清空已有正文。"]})
                 return conflict("内容已变更或已删除。请保留草稿并重新载入。")
-            return Response(identify(model.objects.get(pk=pk)))
+            obj = model.objects.get(pk=pk)
+            if model is KnowledgeDocument:
+                remember_document(obj, request.user)
+            return Response(identify(obj))
     except IntegrityError:
         return conflict("同级名称重复或所属目录已变更，请刷新后再试。")
     except OperationalError as error:
@@ -137,7 +147,17 @@ def remove_content(request, model, pk):
             obj = get_object_or_404(model.objects.select_for_update(), pk=pk)
             if obj.version != revision.validated_data["version"]:
                 return conflict("内容已被更新，请重新载入后再删除。")
-            obj.delete()
+            if model is KnowledgeDocument:
+                if obj.deleted_at:
+                    return Response(status=404)
+                remember_document(obj, request.user)
+                obj.deleted_at = timezone.now()
+                obj.deleted_from = obj.module.name
+                obj.version += 1
+                obj.save(update_fields=["deleted_at", "deleted_from", "version", "updated_at"])
+            else:
+                obj.documents.filter(deleted_at__isnull=False).update(module=None)
+                obj.delete()
     except (ProtectedError, IntegrityError):
         return conflict("目录中还有子目录或文档，请先将它们移走或删除。")
     except OperationalError as error:
@@ -151,7 +171,7 @@ def library(request):
     if request.method == "POST":
         return save_content(request, KnowledgeModule, ModuleInput, module_info)
     modules = KnowledgeModule.objects.prefetch_related(Prefetch(
-        "documents", queryset=KnowledgeDocument.objects.defer("markdown")))
+        "documents", queryset=KnowledgeDocument.objects.filter(deleted_at__isnull=True).defer("markdown")))
     return Response([{
         **module_info(module), "documents": [document_info(doc) for doc in module.documents.all()],
     } for module in modules])
@@ -179,19 +199,23 @@ def search_documents(request):
     query = form.validated_data.get("q", "")
     if not query:
         return Response({"results": [], "has_more": False})
-    docs = KnowledgeDocument.objects.filter(Q(title__icontains=query) | Q(markdown__icontains=query))
+    docs = KnowledgeDocument.objects.filter(deleted_at__isnull=True).filter(Q(title__icontains=query) | Q(markdown__icontains=query))
     scope = form.validated_data.get("scope")
     if scope is not None:
         get_object_or_404(KnowledgeModule, pk=scope)
         docs = docs.filter(module_id__in=directory_subtree(scope))
     match_offset = StrIndex(Lower("markdown"), Lower(Value(query)))
-    results = list(docs.defer("markdown").annotate(
+    ranked = docs.defer("markdown").annotate(
         excerpt=Substr("markdown", Greatest(Value(1), match_offset - 36), 180),
         rank=Case(When(title__iexact=query, then=0), When(title__icontains=query, then=1), default=2),
-    ).order_by("rank", "position", "created_at", "id")[:51])
+    ).order_by("rank", "position", "created_at", "id")
+    from django.core.paginator import Paginator
+    page_size = 25 if "page" in request.query_params else 50
+    page = Paginator(ranked, page_size).get_page(form.validated_data["page"])
+    results = list(page)
     return Response({
-        "results": [{**document_info(doc), "excerpt": " ".join(doc.excerpt.split())} for doc in results[:50]],
-        "has_more": len(results) > 50,
+        "results": [{**document_info(doc), "excerpt": " ".join(doc.excerpt.split())} for doc in results],
+        "has_more": page.has_next(), "total": page.paginator.count, "page": page.number, "page_size": page_size,
     })
 
 
@@ -216,7 +240,7 @@ def document_detail(request, pk):
         return remove_content(request, KnowledgeDocument, pk)
     if request.method == "PUT":
         return save_content(request, KnowledgeDocument, DocumentInput, document_info, pk)
-    doc = get_object_or_404(KnowledgeDocument, pk=pk)
+    doc = get_object_or_404(KnowledgeDocument, pk=pk, deleted_at__isnull=True)
     return Response({**document_info(doc), "markdown": doc.markdown})
 
 

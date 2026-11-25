@@ -6,18 +6,29 @@ import api from "@/utils/api";
 import AttachmentLimitsForm from "./AttachmentLimitsForm.vue";
 
 type Section = "model" | "mail";
-type Provider = "openai_compatible" | "ollama";
+type Provider = "openai_compatible" | "ollama" | "glm";
 interface Service {
   enabled: boolean; version: number; source: "environment" | "database"; has_secret: boolean;
 }
 interface Model extends Service {
-  provider: Provider; base_url: string; model: string;
+  provider: Provider; base_url: string; model: string; thinking: boolean;
 }
 interface Mail extends Service {
   weekday: number; time: string; site_url: string; host: string; port: number;
   username: string; from_email: string; use_tls: boolean; use_ssl: boolean;
 }
 interface Services { model: Model; mail: Mail }
+
+const onlineVendors = [
+  { id: "glm", label: "GLM（智谱）", provider: "glm" as Provider, base_url: "https://open.bigmodel.cn/api/paas/v4", models: ["glm-4.7-flash", "glm-4.7"] },
+  { id: "deepseek", label: "DeepSeek", provider: "openai_compatible" as Provider, base_url: "https://api.deepseek.com", models: ["deepseek-flash", "deepseek-v4-pro"] },
+];
+const onlineVendor = ref("custom");
+const modelNames = computed(() => draft.value?.model.provider === "ollama" ? [] : onlineVendors.find(item => item.id === onlineVendor.value)?.models || []);
+function identifyVendor(model: Model) {
+  const address = model.base_url.replace(/\/+$/, "");
+  return onlineVendors.find(item => item.base_url === address || (item.id === "deepseek" && address === item.base_url + "/v1"))?.id || "custom";
+}
 
 const path = "/admin/config/integrations";
 const route = useRoute();
@@ -34,6 +45,27 @@ const loadError = ref("");
 const week = ["星期一","星期二","星期三","星期四","星期五","星期六","星期日"];
 const showLimits = computed(() => route.query.section === "attachments");
 const active = computed(() => draft.value?.[section.value]);
+function chooseOnlineVendor(id: string) {
+  if (!draft.value) return;
+  onlineVendor.value = id;
+  const preset = onlineVendors.find(item => item.id === id);
+  if (!preset) {
+    draft.value.model.provider = "openai_compatible";
+    return;
+  }
+  const different = draft.value.model.provider !== preset.provider || draft.value.model.base_url !== preset.base_url;
+  Object.assign(draft.value.model, { provider: preset.provider, model: preset.models[0], base_url: preset.base_url, thinking: false });
+  if (different) newSecrets.value.model = "";
+}
+function chooseService(online: boolean) {
+  if (!online) { providerChanged("ollama"); return; }
+  if (!draft.value || !original.value || draft.value.model.provider !== "ollama") return;
+  if (original.value.model.provider !== "ollama") {
+    draft.value.model = { ...original.value.model };
+    onlineVendor.value = identifyVendor(draft.value.model);
+    newSecrets.value.model = "";
+  } else chooseOnlineVendor("glm");
+}
 const mailSecurity = computed({
   get: () => draft.value?.mail.use_ssl ? "ssl" : draft.value?.mail.use_tls ? "tls" : "none",
   set: value => {
@@ -74,6 +106,7 @@ async function load() {
     const {data} = await api.get<Services>(path);
     original.value = data;
     draft.value = {model:{...data.model}, mail:{...data.mail}};
+    onlineVendor.value = identifyVendor(data.model);
     issues.value = {model:"",mail:""};
     newSecrets.value = {model:"",mail:""};
     clearSecrets.value = {model:false,mail:false};
@@ -87,7 +120,8 @@ function providerChanged(provider: Provider) {
   if (!draft.value || !original.value || draft.value.model.provider === provider) return;
   const same = original.value.model.provider === provider;
   Object.assign(draft.value.model, {
-    provider, base_url: same ? original.value.model.base_url : "", model: same ? original.value.model.model : "",
+    provider, base_url: same ? original.value.model.base_url : provider === "glm" ? "https://open.bigmodel.cn/api/paas/v4" : "", model: same ? original.value.model.model : "",
+    thinking: same ? original.value.model.thinking : false,
   });
   newSecrets.value.model = "";
   clearSecrets.value.model = false;
@@ -112,6 +146,7 @@ async function save(reset = false) {
     if (group === "model") {
       original.value.model = data as Model;
       draft.value.model = {...original.value.model};
+      onlineVendor.value = identifyVendor(draft.value.model);
     } else {
       original.value.mail = data as Mail;
       draft.value.mail = {...original.value.mail};
@@ -152,20 +187,21 @@ onMounted(load);
         <template v-if="section==='model'">
           <fieldset class="provider-field"><legend>模型服务</legend>
           <div class="provider-options">
-            <label :class="{chosen:draft.model.provider==='openai_compatible'}">
-              <input type="radio" name="provider" value="openai_compatible" :checked="draft.model.provider==='openai_compatible'" @change="providerChanged('openai_compatible')">
-              <span>在线模型（OpenAI 兼容）</span>
+            <label :class="{chosen:draft.model.provider!=='ollama'}">
+              <input type="radio" name="provider" value="online" :checked="draft.model.provider!=='ollama'" @change="chooseService(true)">
+              <span>在线模型</span>
             </label>
             <label :class="{chosen:draft.model.provider==='ollama'}">
-              <input type="radio" name="provider" value="ollama" :checked="draft.model.provider==='ollama'" @change="providerChanged('ollama')">
+              <input type="radio" name="provider" value="ollama" :checked="draft.model.provider==='ollama'" @change="chooseService(false)">
               <span>本地 Ollama</span>
             </label>
           </div></fieldset>
           <div class="setting-fields">
+            <label v-if="draft.model.provider!=='ollama'" class="wide">模型服务商<select :value="onlineVendor" @change="chooseOnlineVendor(($event.target as HTMLSelectElement).value)"><option v-for="item in onlineVendors" :key="item.id" :value="item.id">{{ item.label }}</option><option value="custom">其他（OpenAI 兼容）</option></select></label>
             <label class="wide">服务地址<input v-model.trim="draft.model.base_url" type="url" :required="active.enabled"
               :placeholder="draft.model.provider==='ollama' ? 'http://127.0.0.1:11434' : 'https://api.example.com/v1'"><small>填写周报服务器可访问的地址。</small></label>
-            <label class="wide">模型名称<input v-model.trim="draft.model.model" :required="active.enabled" maxlength="180"
-              :placeholder="draft.model.provider==='ollama' ? '填写 Ollama 已安装的模型名' : '填写服务商提供的模型 ID'"></label>
+            <label class="wide">模型名称<el-select v-model="draft.model.model" filterable allow-create default-first-option :reserve-keyword="false" aria-label="模型名称" placeholder="选择或输入模型名称"><el-option v-for="name in modelNames" :key="name" :label="name" :value="name" /></el-select></label>
+            <div v-if="draft.model.provider!=='openai_compatible' || /^(glm|deepseek)-/i.test(draft.model.model)" class="wide thinking-row"><span>思考模式</span><el-switch v-model="draft.model.thinking" aria-label="启用思考模式" /></div>
           </div>
         </template>
         <template v-else>
@@ -190,7 +226,7 @@ onMounted(load);
             <small v-if="section==='model' && !(differentAddress && active.has_secret)">此处填写的密钥会在服务器上加密保存。</small>
             <small v-if="differentAddress && active.has_secret">连接信息已更改。新服务如需凭据，请重新填写。</small>
           </label>
-          <label v-if="active.has_secret && !differentAddress" class="check-field wide"><input v-model="clearSecrets[section]" type="checkbox" @change="newSecrets[section]=''">清除当前凭据</label>
+          <div v-if="active.has_secret && !differentAddress" class="thinking-row wide"><span>清除当前凭据</span><el-switch v-model="clearSecrets[section]" aria-label="清除当前凭据" @change="newSecrets[section]=''" /></div>
         </div>
         <div v-if="issues[section]" class="error-row" role="alert">{{ issues[section] }} <button type="button" class="link-button" @click="load">重新载入</button></div>
         <footer>
@@ -225,7 +261,7 @@ fieldset{border:0;margin:0;padding:0;min-width:0}.enable-row,footer{display:flex
 .setting-fields>label{display:flex;flex-direction:column;gap:5px;font-size:13px;font-weight:600}.setting-fields .wide{grid-column:1/-1}
 .setting-fields input:not([type=checkbox]),.setting-fields select{border:1px solid #a7b9ad;border-radius:6px;background:rgb(255 255 255 / 68%);color:var(--ink);width:100%;padding:9px 11px;min-height:39px;font:inherit;font-weight:400}
 .settings-panel :is(input,select,button):focus-visible{outline:2px solid #41815f;outline-offset:2px}.setting-fields small{margin:0}.credentials{margin-top:15px}
-.setting-fields .check-field{flex-direction:row;align-items:center;font-weight:400}.error-row{color:#9e3529;margin:12px 0;font-size:14px}
+.setting-fields .check-field{flex-direction:row;align-items:center;font-weight:400}.thinking-row{display:flex;align-items:center;justify-content:space-between;gap:12px;font-size:13px}.error-row{color:#9e3529;margin:12px 0;font-size:14px}
 footer{border-top:1px solid var(--line);padding-top:17px;margin-top:22px;font-size:13px}.save-actions{display:flex;align-items:center;gap:14px;flex-wrap:wrap}
 .save{background:#276447;color:white;border:0;border-radius:7px;padding:9px 17px;font-size:14px;font-weight:650}.save:disabled{background:#dae4dc;color:#627169}
 @media(max-width:620px){.setting-fields,.provider-options{grid-template-columns:1fr}.enable-row{align-items:flex-start}footer{align-items:flex-start;flex-direction:column}.provider-options{gap:8px}.settings-page{min-width:0}}

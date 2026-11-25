@@ -144,6 +144,7 @@ def request_completion(config, messages, *, schema=None):
     payload = {"model": config["model"], "messages": messages}
     ollama = config["provider"] == "ollama"
     if ollama:
+        payload["think"] = config.get("thinking", False)
         endpoint = base + ("/chat" if base.endswith("/api") else "/api/chat")
         payload["stream"] = False
         if schema is None:
@@ -151,6 +152,8 @@ def request_completion(config, messages, *, schema=None):
         else:
             payload.update(format=schema, options={"temperature": 0.1})
     else:
+        if config["provider"] == "glm" or config["model"].lower().startswith(("glm-", "deepseek-")):
+            payload["thinking"] = {"type": "enabled" if config.get("thinking", False) else "disabled"}
         endpoint = base + "/chat/completions"
         payload["max_tokens"] = 512 if schema is None else 4096
         if schema is not None:

@@ -17,6 +17,7 @@ def defaults(section):
             "enabled": settings.LLM_ENABLED, "provider": settings.LLM_PROVIDER.lower(),
             "base_url": settings.LLM_BASE_URL.rstrip("/"), "model": settings.LLM_MODEL,
             "api_key": settings.LLM_API_KEY_ENCRYPTED or settings.LLM_API_KEY,
+            "thinking": getattr(settings, "LLM_THINKING", False),
         }
     return {
         "enabled": settings.WEEKLY_REMINDERS_ENABLED, "weekday": settings.REMINDER_WEEKDAY,
@@ -90,7 +91,7 @@ def mail_issues(config):
 
 def model_issues(config):
     issues = []
-    if config["provider"] not in {"ollama", "openai_compatible"}:
+    if config["provider"] not in {"ollama", "openai_compatible", "glm"}:
         issues.append("LLM_PROVIDER")
     if not http_address(config["base_url"]):
         issues.append("LLM_BASE_URL")

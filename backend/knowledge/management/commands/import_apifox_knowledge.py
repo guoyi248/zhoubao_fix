@@ -13,7 +13,7 @@ from django.db import IntegrityError, transaction
 from PIL import Image
 
 from common.storage import storage
-from knowledge.models import KnowledgeDocument, KnowledgeModule
+from knowledge.models import KnowledgeDocument, KnowledgeModule, remember_document
 
 
 def fingerprint(fields):
@@ -29,6 +29,11 @@ def save_node(model, key, fields, counts):
                                    source_hash=incoming, **fields)
         counts["新增"] += 1
     else:
+        if model is KnowledgeDocument and obj.deleted_at:
+            counts["保留回收站文档"] += 1
+            return obj
+        if model is KnowledgeDocument:
+            remember_document(obj)
         current = fingerprint({field: getattr(obj, field) for field in fields})
         if current != obj.source_hash and current != incoming:
             counts["保留本地编辑"] += 1
@@ -41,6 +46,8 @@ def save_node(model, key, fields, counts):
             counts["更新"] += 1
         else:
             counts["相同"] += 1
+    if model is KnowledgeDocument:
+        remember_document(obj)
     return obj
 
 

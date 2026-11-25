@@ -26,8 +26,8 @@ class Command(BaseCommand):
 
     def handle(self, *args, **options):
         model = defaults("model")
-        if model["provider"] not in {"ollama", "openai_compatible"}:
-            raise CommandError("请先将 LLM_PROVIDER 设为 openai_compatible 或 ollama。")
+        if model["provider"] not in {"ollama", "openai_compatible", "glm"}:
+            raise CommandError("请先将 LLM_PROVIDER 设为 openai_compatible、glm 或 ollama。")
         if not http_address(model["base_url"]):
             raise CommandError("请先配置有效的 LLM_BASE_URL。")
 

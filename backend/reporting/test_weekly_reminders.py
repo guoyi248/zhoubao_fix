@@ -24,6 +24,37 @@ def account(name, **overrides):
     return User.objects.create_user(username=name, **{**fields, **overrides})
 
 
+@freeze_time("2026-11-11 02:00:00Z")
+def test_admin_saves_scheduled_recipient_switch_without_sending(client, settings):
+    admin = account("admin-selected", role="admin")
+    selected = account("selected")
+    account("unselected")
+    client.force_login(admin)
+    path = f"/api/v1/admin/reports/reminders/{selected.pk}"
+    response = client.patch(path, {"enabled": False}, content_type="application/json")
+    assert response.status_code == 200 and response.json()["enabled"] is False
+    selected.refresh_from_db()
+    assert selected.weekly_reminders_enabled is False
+    assert send_weekly_reminders() == 0 and not WeeklyReminder.objects.exists()
+    roster = client.get("/api/v1/me/reports/reminders").json()["team"]["members"]
+    assert next(row for row in roster if row["id"] == selected.pk)["reminder_enabled"] is False
+    client.force_login(selected)
+    assert client.patch(path, {"enabled": True}, content_type="application/json").status_code == 403
+
+
+@freeze_time("2026-11-15 10:01:00Z")
+def test_scheduler_respects_saved_switch_and_sends_once(client):
+    enabled = account("enabled")
+    disabled = account("disabled-reminder", weekly_reminders_enabled=False)
+    assert send_weekly_reminders() == 1
+    assert [m.to for m in mail.outbox] == [[enabled.email]]
+    assert send_weekly_reminders() == 0
+    disabled.weekly_reminders_enabled = True
+    disabled.save(update_fields=["weekly_reminders_enabled"])
+    assert send_weekly_reminders() == 1
+    assert mail.outbox[-1].to == [disabled.email]
+
+
 @pytest.fixture(autouse=True)
 def reminder_settings(settings):
     settings.WEEKLY_REMINDERS_ENABLED = True

@@ -5,6 +5,7 @@
 """
 
 from uuid import UUID
+from datetime import timedelta
 
 from django.db import transaction
 from django.db.models import OuterRef, Subquery
@@ -72,6 +73,11 @@ def _get_or_create_report(user, period):
 def current_report(request):
     """GET /api/v1/me/reports/current —— 获取或自动创建当前周期的周报。"""
     period = current_period()
+    week = request.query_params.get("week", "current")
+    if week not in {"current", "previous"}:
+        return Response({"message": "请选择本周或上周"}, status=400)
+    if week == "previous":
+        period = current_period(period.start_date - timedelta(days=7))
     report = _get_or_create_report(request.user, period)
     return Response({
         **WeeklyReportDetailSerializer(report).data,
@@ -93,7 +99,7 @@ def list_my_reports(request):
 def get_my_report(request, report_id):
     """GET /api/v1/me/reports/{id}"""
     report = get_object_or_404(WeeklyReport, id=report_id, owner=request.user)
-    return Response(WeeklyReportDetailSerializer(report).data)
+    return Response({**WeeklyReportDetailSerializer(report).data, "attachment_limits": policy()["limits"]})
 
 
 @api_view(["PATCH"])
@@ -374,10 +380,16 @@ def reminder_center(request):
         "sent_at": receipts.filter(user=user).values_list("sent_at", flat=True).first(),
     }
     if user.is_admin:
+        from accounts.models import User
         data["setup"] = setup_info(issues)
         delivery = list(receipts.order_by("-sent_at").values("user_id", "user__display_name", "sent_at"))
         times = {r["user_id"]: r["sent_at"] for r in delivery}
+        missing_ids = set(missing_members(period).values_list("pk", flat=True))
         data["team"] = {
+            "members": [{"id": u.pk, "name": u.display_name, "email": u.email,
+                         "reminder_enabled": u.weekly_reminders_enabled,
+                         "submitted": u.pk not in missing_ids,
+                         "sent_at": times.get(u.pk)} for u in User.objects.active().order_by("display_name", "pk")],
             "missing": [{"id": u.pk, "name": u.display_name, "email": u.email, "sent_at": times.get(u.pk)}
                         for u in missing_members(period)],
             "sent": [{"name": r["user__display_name"], "sent_at": r["sent_at"]} for r in delivery],
@@ -386,6 +398,19 @@ def reminder_center(request):
     subject, body = reminder_message(period, user.display_name, "〔工作区网址〕")
     data["preview"] = {"subject": subject, "body": body}
     return Response(data)
+
+
+@api_view(["PATCH"])
+def set_reminder_preference(request, user_id):
+    _require_admin(request.user)
+    from accounts.models import User
+    from .serializers import ReminderPreferenceSerializer
+    form = ReminderPreferenceSerializer(data=request.data)
+    form.is_valid(raise_exception=True)
+    member = get_object_or_404(User.objects.active(), pk=user_id)
+    member.weekly_reminders_enabled = form.validated_data["enabled"]
+    member.save(update_fields=["weekly_reminders_enabled"])
+    return Response({"id": member.pk, "enabled": member.weekly_reminders_enabled})
 
 
 @api_view(["GET"])

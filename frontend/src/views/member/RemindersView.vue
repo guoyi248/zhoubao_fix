@@ -7,11 +7,11 @@ import api from "@/utils/api";
 import { serviceLabel, type ServiceState } from "@/utils/weeklyServices";
 import type { Period } from "@/utils/week";
 
-interface Missing { id: number; name: string; email: string; sent_at: string | null }
+interface Member { id: number; name: string; email: string; sent_at: string | null; reminder_enabled: boolean; submitted: boolean }
 interface MailState extends ServiceState {
   weekday: number; time: string; timezone: string; period: Period; email: string; submitted: boolean; sent_at: string | null;
   preview: { subject: string; body: string };
-  team?: { missing: Missing[]; sent: { name: string; sent_at: string }[] };
+  team?: { members: Member[]; sent: { name: string; sent_at: string }[] };
 }
 const weekDays = ["周一","周二","周三","周四","周五","周六","周日"];
 const service = ref<MailState>();
@@ -21,6 +21,16 @@ const tab = ref<"missing" | "sent">("missing");
 const error = ref("");
 const loading = ref(false);
 const saving = ref(false);
+const updating = ref<number[]>([]);
+async function toggleMember(member: Member) {
+  if (updating.value.includes(member.id)) return false;
+  updating.value.push(member.id);
+  try {
+    await api.patch(`/admin/reports/reminders/${member.id}`, { enabled: !member.reminder_enabled });
+    return true;
+  } catch (e: any) { ElMessage.error(e.message || "提醒设置保存失败"); return false; }
+  finally { updating.value = updating.value.filter(id => id !== member.id); }
+}
 const active = computed(() => service.value?.enabled && service.value?.configured);
 const zone = computed(() => service.value?.timezone === "Asia/Shanghai" ? "北京时间" : service.value?.timezone);
 function sentTime(value: string) {
@@ -77,7 +87,7 @@ onMounted(load);
             <span class="service-state" :class="{active}">{{ serviceLabel(service) }}</span>
           </header>
           <p class="schedule-time">每{{ weekDays[service.weekday-1] }} {{ service.time }}<small>{{ zone }}</small></p>
-          <p class="muted">{{ !active && !service.setup ? '管理员启用并配置发件邮箱后生效。' : '截止前检查未交周报，每人每周提醒一次。' }}</p>
+          <p class="muted">到点自动提醒已开启通知且未交周报的成员，每人每周一次。</p>
           <details class="mail-preview">
             <summary>预览提醒邮件</summary>
             <strong>{{ service.preview.subject }}</strong><p>{{ service.preview.body }}</p>
@@ -90,16 +100,17 @@ onMounted(load);
           <router-link to="/admin/members" class="link-button">管理成员邮箱</router-link>
         </header>
         <div class="tabline" aria-label="团队提醒记录">
-          <button :aria-pressed="tab==='missing'" :class="{chosen:tab==='missing'}" @click="tab='missing'">未交周报 <b>{{ service.team.missing.length }}</b></button>
+          <button :aria-pressed="tab==='missing'" :class="{chosen:tab==='missing'}" @click="tab='missing'">成员设置 <b>{{ service.team.members.length }}</b></button>
           <button :aria-pressed="tab==='sent'" :class="{chosen:tab==='sent'}" @click="tab='sent'">已发提醒 <b>{{ service.team.sent.length }}</b></button>
         </div>
         <template v-if="tab==='missing'">
-          <div v-for="m in service.team.missing" :key="m.id" class="data-row">
+          <div v-for="m in service.team.members" :key="m.id" class="data-row">
             <span class="avatar" aria-hidden="true">{{ m.name.slice(-1) }}</span>
             <span class="person"><strong>{{ m.name }}</strong><small>{{ m.email || '未填写收件邮箱' }}</small></span>
-            <span v-if="m.sent_at || (m.email && active)" class="row-end muted">{{ m.sent_at ? '已提醒' : '待提醒' }}</span>
+            <span class="row-end muted">{{ m.submitted ? '本周已交' : m.sent_at ? '本周已提醒' : '本周未交' }}</span>
+            <el-switch v-model="m.reminder_enabled" :loading="updating.includes(m.id)" :before-change="()=>toggleMember(m)" :aria-label="m.name+'的定时提醒'" />
           </div>
-          <p v-if="!service.team.missing.length" class="empty-copy">本周已全员提交。</p>
+          <p v-if="!service.team.members.length" class="empty-copy">暂无成员。</p>
         </template>
         <template v-else>
           <div v-for="(r,i) in service.team.sent" :key="i" class="data-row">

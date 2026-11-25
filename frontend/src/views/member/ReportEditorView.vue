@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { ref, onMounted, onUnmounted, computed } from "vue";
+import { ref, watch, onUnmounted, computed } from "vue";
 import { useRoute, useRouter } from "vue-router";
 import { ElMessage, ElMessageBox } from "element-plus";
 import { Document, Upload } from "@element-plus/icons-vue";
@@ -48,6 +48,7 @@ const submitHint = computed(() => {
 let timer: ReturnType<typeof setTimeout> | undefined;
 let generation = 0;
 let active = true;
+let reportRequest = 0;
 
 function stopPolling() {
   clearTimeout(timer);
@@ -86,17 +87,27 @@ function togglePreview(id: string) {
 }
 
 async function loadReport() {
+  const request = ++reportRequest;
+  stopPolling();
+  report.value = null;
+  attachments.value = [];
+  selectedId.value = "";
+  previewAttId.value = "";
+  previewHidden.value = false;
   loading.value = true;
   error.value = "";
   try {
-    const { data } = await api.get("/me/reports/current");
-    if (!active) return;
+    const reportId = typeof route.query.report === "string" ? route.query.report : "";
+    const { data } = await api.get(reportId ? `/me/reports/${reportId}` : "/me/reports/current", {
+      params: reportId ? undefined : { week: route.query.week === "previous" ? "previous" : "current" },
+    });
+    if (!active || request !== reportRequest) return;
     report.value = data;
     await loadAttachments();
-  } catch (e: any) { error.value = e.message || "周报加载失败"; }
-  finally { loading.value = false; }
+  } catch (e: any) { if (active && request === reportRequest) error.value = e.message || "周报加载失败"; }
+  finally { if (active && request === reportRequest) loading.value = false; }
 }
-onMounted(loadReport);
+watch(() => route.fullPath, loadReport, { immediate: true });
 onUnmounted(() => { active = false; stopPolling(); });
 
 async function changeFiles(action: () => Promise<void>) {
@@ -176,7 +187,7 @@ function handleSubmit() {
   return changeFiles(async () => {
     await ElMessageBox.confirm(selectedFile.value
       ? "本次提交使用“" + (selectedFile.value.uploaded_filename || selectedFile.value.original_filename) + "”。"
-      : "本次提交使用已填写的正文。", "提交本周周报", { confirmButtonText: "提交", cancelButtonText: "返回" });
+      : "本次提交使用已填写的正文。", `提交${weekLabel.value}周报`, { confirmButtonText: "提交", cancelButtonText: "返回" });
     submitting.value = true;
     try {
       await api.post(`/me/reports/${report.value.id}/submit`, { confirmed_pdf_attachment_id: selectedId.value || null });
@@ -213,10 +224,11 @@ function canConfirm(s:string) { return ["preview_ready","preview_warning"].inclu
     <template v-if="report">
       <header class="editor-header glass-heading">
         <div>
-          <h1 class="page-title">{{ isEditable ? '提交周报' : '本周周报' }}</h1>
+          <h1 class="page-title">{{ route.query.week==='previous' ? '上周周报' : route.query.report ? '历史周报' : '本周周报' }}</h1>
           <p class="page-sub">{{ report.period.iso_year }} 年{{ weekLabel }} · {{ weekRange(report.period) }}</p>
         </div>
         <div class="action-row">
+          <router-link v-if="!busy && !submitting" class="link-button" :to="route.query.week==='previous' || route.query.report ? '/reports/current' : '/reports/current?week=previous'">{{ route.query.week==='previous' || route.query.report ? '返回本周' : '补交上周周报' }}</router-link>
           <span class="pill" :class="isEditable ? 'waiting' : 'good'">{{ report.status === 'archived' ? '已归档' : report.status === 'resubmitted' ? '更正中' : isEditable ? '待提交' : '已提交' }}</span>
           <el-button v-if="report.status === 'submitted'" :disabled="busy" @click="correctReport">更正周报</el-button>
         </div>

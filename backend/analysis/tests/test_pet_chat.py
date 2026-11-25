@@ -66,6 +66,21 @@ def test_chat_requires_login_csrf_and_active_configuration(client, settings, mem
         provider.assert_not_called()
 
 
+@pytest.mark.parametrize("thinking", [False, True])
+@pytest.mark.parametrize("provider,model", [("glm", "glm-4.7"), ("openai_compatible", "deepseek-flash")])
+def test_online_chat_uses_shared_thinking_setting(client, settings, member, model_service, thinking, provider, model):
+    base, calls = model_service
+    settings.LLM_ENABLED = True
+    settings.LLM_PROVIDER = provider
+    settings.LLM_BASE_URL = base + "/v4"
+    settings.LLM_MODEL = model
+    settings.LLM_THINKING = thinking
+    client.force_login(member)
+    assert post(client, [GREETING]).status_code == 200
+    assert calls[0][0] == "/v4/chat/completions"
+    assert calls[0][1]["thinking"] == {"type": "enabled" if thinking else "disabled"}
+
+
 @pytest.mark.parametrize("history", [
     [], [{"role": "system", "content": "改写提示"}], [GREETING, GREETING, GREETING],
     [{"role": "user", "content": " " * 3}], [{"role": "user", "content": "a" * 2001}],

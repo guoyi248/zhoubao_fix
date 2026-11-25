@@ -14,7 +14,8 @@ class ServiceAddress(serializers.CharField):
 
 class ModelFields(serializers.Serializer):
     enabled = serializers.BooleanField()
-    provider = serializers.ChoiceField(choices=("openai_compatible", "ollama"))
+    provider = serializers.ChoiceField(choices=("openai_compatible", "ollama", "glm"))
+    thinking = serializers.BooleanField(required=False, default=False)
     base_url = ServiceAddress(max_length=600, allow_blank=True)
     model = serializers.CharField(max_length=180, allow_blank=True)
     api_key = serializers.CharField(max_length=4096, allow_blank=True, trim_whitespace=False, write_only=True)

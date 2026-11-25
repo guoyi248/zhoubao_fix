@@ -52,13 +52,14 @@ onMounted(load);
   <div class="my-reports" v-loading="loading" :aria-busy="loading">
     <header class="page-heading">
       <h1 class="page-title">历史周报</h1>
+      <router-link class="link-button" to="/reports/current?week=previous">补交上周周报</router-link>
       <router-link class="link-button" to="/analysis">AI 周报解析 <el-icon><ArrowRight /></el-icon></router-link>
     </header>
     <el-alert v-if="error" type="error" :closable="false">
       <template #title>{{ error }} <button class="link-button" @click="load">重试</button></template>
     </el-alert>
     <section v-else class="panel history-list" aria-label="我的历史周报">
-      <button v-for="row in reports" :key="row.id" class="history-item" @click="selected=row.id">
+      <button v-for="row in reports" :key="row.id" class="history-item" @click="row.current_revision_id ? selected=row.id : router.push({path:'/reports/current',query:{report:row.id}})">
         <span class="soft-icon" aria-hidden="true"><el-icon><Document /></el-icon></span>
         <span class="report-name">
           <strong>{{ row.published_filename || weekName(row) }}</strong>

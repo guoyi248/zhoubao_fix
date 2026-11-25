@@ -30,6 +30,10 @@ class ReminderEmailSerializer(serializers.Serializer):
     email = serializers.EmailField(allow_blank=True, max_length=254)
 
 
+class ReminderPreferenceSerializer(serializers.Serializer):
+    enabled = serializers.BooleanField()
+
+
 class SaveDraftSerializer(serializers.Serializer):
     """保存草稿。"""
 

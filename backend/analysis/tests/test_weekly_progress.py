@@ -21,7 +21,7 @@ def pdf(text=""):
         return doc.tobytes()
 
 
-@pytest.mark.parametrize("provider", ["openai_compatible", "ollama"])
+@pytest.mark.parametrize("provider", ["openai_compatible", "ollama", "glm"])
 def test_submission_uses_all_frozen_files_and_corrected_version(client, settings, model_service, provider):
     base, calls = model_service
     settings.LLM_ENABLED = True
@@ -47,6 +47,8 @@ def test_submission_uses_all_frozen_files_and_corrected_version(client, settings
     assert result["summary"] == "已完成验收。" and result["items"][0]["title"] == "完成验收"
     assert result["tokens_used"] == (5 if provider == "ollama" else 8)
     endpoint, payload, auth = calls[0]
+    if provider == "glm":
+        assert payload["thinking"] == {"type": "disabled"}
     assert endpoint == ("/api/chat" if provider == "ollama" else "/v1/chat/completions")
     assert auth == (None if provider == "ollama" else "Bearer synthetic-test-key")
     prompt = payload["messages"][1]["content"]
